@@ -35,6 +35,14 @@ npm run build
 npm run preview
 ```
 
+## Publish online (Vercel)
+
+1. Go to [vercel.com/new](https://vercel.com/new)
+2. Import the GitHub repo `Ven1ss/auto-shabani-stock-counter`
+3. Click Deploy (defaults are fine)
+
+You get an HTTPS URL automatically. Camera scanning requires HTTPS on a real phone.
+
 ## Notes
 
 - Camera permission is requested only when the scanner opens.
