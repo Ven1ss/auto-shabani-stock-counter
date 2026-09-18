@@ -11,7 +11,11 @@ export type ScannerErrorCode =
   | 'unsupported'
   | 'unknown'
 
-const SCAN_COOLDOWN_MS = 800
+const SCAN_COOLDOWN_MS = 700
+
+/** Keep in sync with `.scan-frame` in index.css — only this region is decoded. */
+const ROI_WIDTH_RATIO = 0.9
+const ROI_HEIGHT_RATIO = 0.3
 
 const NATIVE_FORMATS = [
   'ean_13',
@@ -145,6 +149,46 @@ function clearContainer(elementId: string) {
   if (el) el.innerHTML = ''
 }
 
+/**
+ * Crop the center scan band from the camera frame and boost contrast.
+ * Ignoring surroundings outside this ROI is critical for reliable 1D reads.
+ */
+function prepareScanRoi(
+  video: HTMLVideoElement,
+  canvas: HTMLCanvasElement,
+  ctx: CanvasRenderingContext2D,
+): boolean {
+  const vw = video.videoWidth
+  const vh = video.videoHeight
+  if (!vw || !vh) return false
+
+  const roiW = Math.max(1, Math.floor(vw * ROI_WIDTH_RATIO))
+  const roiH = Math.max(1, Math.floor(vh * ROI_HEIGHT_RATIO))
+  const sx = Math.floor((vw - roiW) / 2)
+  const sy = Math.floor((vh - roiH) / 2)
+
+  // Upscale thin barcode strips so detectors have enough pixels.
+  const scale = Math.max(1, Math.min(2.5, 900 / roiW))
+  const tw = Math.floor(roiW * scale)
+  const th = Math.floor(roiH * scale)
+
+  if (canvas.width !== tw || canvas.height !== th) {
+    canvas.width = tw
+    canvas.height = th
+  }
+
+  ctx.save()
+  ctx.clearRect(0, 0, tw, th)
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = 'high'
+  // Grayscale + contrast reduces background clutter noise.
+  ctx.filter = 'grayscale(1) contrast(1.55) brightness(1.08)'
+  ctx.drawImage(video, sx, sy, roiW, roiH, 0, 0, tw, th)
+  ctx.restore()
+
+  return true
+}
+
 export function createScannerController(elementId: string): ScannerController {
   let mode: 'native' | 'html5' | null = null
   let running = false
@@ -155,15 +199,15 @@ export function createScannerController(elementId: string): ScannerController {
   let onScanHandler: ((barcode: string) => void) | null = null
   const cooldown = new BarcodeScanCooldown()
 
-  // Native path state
   let stream: MediaStream | null = null
   let videoEl: HTMLVideoElement | null = null
   let detector: BarcodeDetectorLike | null = null
   let rafId = 0
   let detecting = false
   let lastDetectAt = 0
+  let roiCanvas: HTMLCanvasElement | null = null
+  let roiCtx: CanvasRenderingContext2D | null = null
 
-  // html5-qrcode fallback state
   let html5Scanner: Html5Qrcode | null = null
 
   function emitBarcode(raw: string) {
@@ -222,6 +266,8 @@ export function createScannerController(elementId: string): ScannerController {
       stream = null
     }
     detector = null
+    roiCanvas = null
+    roiCtx = null
   }
 
   async function stopHtml5() {
@@ -262,23 +308,21 @@ export function createScannerController(elementId: string): ScannerController {
       deviceId
         ? {
             deviceId: { exact: deviceId },
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
             facingMode: { ideal: 'environment' },
           }
         : {
             facingMode: { ideal: 'environment' },
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
           }
     ) as MediaTrackConstraints
 
-    const constraints: MediaStreamConstraints = {
+    stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
       video: videoConstraints,
-    }
-
-    stream = await navigator.mediaDevices.getUserMedia(constraints)
+    })
     videoEl.srcObject = stream
     await videoEl.play()
 
@@ -288,14 +332,23 @@ export function createScannerController(elementId: string): ScannerController {
       detector = new Detector()
     }
 
+    roiCanvas = document.createElement('canvas')
+    roiCtx = roiCanvas.getContext('2d', {
+      willReadFrequently: true,
+      alpha: false,
+    })
+    if (!roiCtx) throw new Error('Could not create scan canvas')
+
     mode = 'native'
     running = true
     torchSupported = await detectTorchSupport()
 
-    const DETECT_INTERVAL_MS = 45
+    const DETECT_INTERVAL_MS = 50
 
     const tick = async () => {
-      if (!running || mode !== 'native' || !videoEl || !detector) return
+      if (!running || mode !== 'native' || !videoEl || !detector || !roiCanvas || !roiCtx) {
+        return
+      }
       rafId = requestAnimationFrame(() => {
         void tick()
       })
@@ -307,13 +360,17 @@ export function createScannerController(elementId: string): ScannerController {
       detecting = true
       lastDetectAt = now
       try {
-        const results = await detector.detect(videoEl)
+        if (!prepareScanRoi(videoEl, roiCanvas, roiCtx)) return
+
+        const results = await detector.detect(roiCanvas)
         if (results.length > 0) {
           const value = results[0]?.rawValue
-          if (value) emitBarcode(value)
+          if (value) {
+            emitBarcode(value)
+            return
+          }
         }
       } catch (error) {
-        // Transient detect errors are common while focusing; keep scanning.
         console.debug('Barcode detect frame skipped:', error)
       } finally {
         detecting = false
@@ -341,12 +398,15 @@ export function createScannerController(elementId: string): ScannerController {
     await html5Scanner.start(
       cameraIdOrConfig,
       {
-        fps: 30,
+        fps: 24,
         qrbox: (viewfinderWidth, viewfinderHeight) => {
-          // Wide scan band works much better for 1D product barcodes.
-          const width = Math.floor(Math.min(viewfinderWidth * 0.92, 520))
-          const height = Math.floor(Math.min(viewfinderHeight * 0.42, 240))
-          return { width, height }
+          // Match the on-screen frame so surroundings outside are ignored.
+          const width = Math.floor(viewfinderWidth * ROI_WIDTH_RATIO)
+          const height = Math.floor(viewfinderHeight * ROI_HEIGHT_RATIO)
+          return {
+            width: Math.max(220, width),
+            height: Math.max(100, height),
+          }
         },
         disableFlip: true,
         videoConstraints:
@@ -354,13 +414,13 @@ export function createScannerController(elementId: string): ScannerController {
             ? {
                 deviceId: { exact: cameraIdOrConfig },
                 facingMode: 'environment',
-                width: { ideal: 1920 },
-                height: { ideal: 1080 },
+                width: { ideal: 1280 },
+                height: { ideal: 720 },
               }
             : {
                 facingMode: 'environment',
-                width: { ideal: 1920 },
-                height: { ideal: 1080 },
+                width: { ideal: 1280 },
+                height: { ideal: 720 },
               },
       } as Parameters<Html5Qrcode['start']>[1],
       (decodedText) => emitBarcode(decodedText),
@@ -372,7 +432,6 @@ export function createScannerController(elementId: string): ScannerController {
     mode = 'html5'
     running = true
 
-    // Torch support via media track if present
     try {
       const video = document.querySelector(
         `#${elementId} video`,
@@ -400,7 +459,6 @@ export function createScannerController(elementId: string): ScannerController {
       cameraIndex = cameras.length > 0 ? pickRearCameraIndex(cameras) : 0
       const preferredId = cameras[cameraIndex]?.id
 
-      // Prefer native BarcodeDetector — dramatically faster on Chrome/Android.
       if (getBarcodeDetector()) {
         try {
           await startNative(preferredId)

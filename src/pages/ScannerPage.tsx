@@ -310,7 +310,7 @@ export function ScannerPage() {
           <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
             <div className="scan-frame" />
             <p className="mt-6 rounded-full bg-black/55 px-4 py-2 text-sm text-white backdrop-blur">
-              Point the camera at a barcode
+              Align the barcode inside the box
             </p>
           </div>
         ) : null}
