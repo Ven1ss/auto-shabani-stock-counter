@@ -177,11 +177,11 @@ select:focus-visible {
 }
 
 .scan-frame {
-  width: min(85vw, 360px);
-  height: min(28vh, 160px);
-  border: 2px solid rgba(255, 255, 255, 0.9);
+  width: min(92vw, 520px);
+  height: min(42vh, 240px);
+  border: 2px solid rgba(255, 255, 255, 0.95);
   border-radius: 1rem;
-  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.28);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.22);
 }
 
 #barcode-reader {
