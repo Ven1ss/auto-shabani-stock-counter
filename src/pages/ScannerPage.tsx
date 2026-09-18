@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { ManualEntryModal } from '../components/ManualEntryModal'
+import { ScanConfirmDialog } from '../components/ScanConfirmDialog'
 import { ScanFeedback } from '../components/ScanFeedback'
 import { usePreferences } from '../hooks/usePreferences'
 import { useStockCount } from '../hooks/useStockCount'
@@ -19,7 +20,7 @@ import {
   incrementBarcode,
 } from '../services/stockCountService'
 import { formatNumber } from '../utils/format'
-import { getLastScannedItem } from '../utils/stockCountLogic'
+import { getLastScannedItem, normalizeBarcode } from '../utils/stockCountLogic'
 
 const SCANNER_ELEMENT_ID = 'barcode-reader'
 
@@ -36,6 +37,8 @@ export function ScannerPage() {
   const [cameraCount, setCameraCount] = useState(0)
   const [manualOpen, setManualOpen] = useState(false)
   const [leaveOpen, setLeaveOpen] = useState(false)
+  const [pendingBarcode, setPendingBarcode] = useState<string | null>(null)
+  const [confirming, setConfirming] = useState(false)
   const [feedback, setFeedback] = useState<{
     barcode: string
     quantity: number
@@ -44,12 +47,17 @@ export function ScannerPage() {
 
   const scannerRef = useRef<ScannerController | null>(null)
   const processingRef = useRef(false)
+  const pendingBarcodeRef = useRef<string | null>(null)
   const feedbackTimerRef = useRef<number | null>(null)
   const preferencesRef = useRef(preferences)
 
   useEffect(() => {
     preferencesRef.current = preferences
   }, [preferences])
+
+  useEffect(() => {
+    pendingBarcodeRef.current = pendingBarcode
+  }, [pendingBarcode])
 
   const stats = useMemo(
     () => calculateStatistics(count?.items ?? []),
@@ -60,7 +68,12 @@ export function ScannerPage() {
     [count?.items],
   )
 
-  const handleScan = useCallback(
+  const pendingCurrentQuantity = useMemo(() => {
+    if (!pendingBarcode || !count) return 0
+    return count.items.find((item) => item.barcode === pendingBarcode)?.quantity ?? 0
+  }, [count, pendingBarcode])
+
+  const commitScan = useCallback(
     async (barcode: string) => {
       if (processingRef.current) return
       const current = getLatest()
@@ -70,7 +83,7 @@ export function ScannerPage() {
       try {
         const updated = await addScan(current, barcode)
         replaceCount(updated)
-        const item = updated.items.find((i) => i.barcode === barcode.trim())
+        const item = updated.items.find((i) => i.barcode === normalizeBarcode(barcode))
         if (item) {
           if (feedbackTimerRef.current) {
             window.clearTimeout(feedbackTimerRef.current)
@@ -90,6 +103,40 @@ export function ScannerPage() {
     [getLatest, replaceCount],
   )
 
+  const handleDetectedScan = useCallback(
+    (rawBarcode: string) => {
+      if (processingRef.current || pendingBarcodeRef.current) return
+      const barcode = normalizeBarcode(rawBarcode)
+      if (!barcode) return
+
+      const current = getLatest()
+      if (!current || current.status === 'completed') return
+
+      pendingBarcodeRef.current = barcode
+      setPendingBarcode(barcode)
+      void provideScanFeedback(preferencesRef.current)
+    },
+    [getLatest],
+  )
+
+  async function handleConfirmScan() {
+    if (!pendingBarcode || confirming) return
+    setConfirming(true)
+    try {
+      await commitScan(pendingBarcode)
+      pendingBarcodeRef.current = null
+      setPendingBarcode(null)
+    } finally {
+      setConfirming(false)
+    }
+  }
+
+  function handleCancelScan() {
+    if (confirming) return
+    pendingBarcodeRef.current = null
+    setPendingBarcode(null)
+  }
+
   useEffect(() => {
     if (!count || count.status === 'completed') return
 
@@ -105,7 +152,7 @@ export function ScannerPage() {
         setCameraError(null)
         try {
           await controller.start((barcode) => {
-            void handleScan(barcode)
+            handleDetectedScan(barcode)
           })
           if (!cancelled) {
             setTorchSupported(controller.getTorchSupported())
@@ -134,7 +181,7 @@ export function ScannerPage() {
         window.clearTimeout(feedbackTimerRef.current)
       }
     }
-  }, [count?.id, count?.status, handleScan])
+  }, [count?.id, count?.status, handleDetectedScan])
 
   useEffect(() => {
     if (count?.status === 'completed' && id) {
@@ -169,7 +216,7 @@ export function ScannerPage() {
 
   async function handleManualSubmit(barcode: string) {
     setManualOpen(false)
-    await handleScan(barcode)
+    await commitScan(barcode)
   }
 
   async function handleManualIncrement() {
@@ -371,6 +418,15 @@ export function ScannerPage() {
           </button>
         </div>
       </div>
+
+      <ScanConfirmDialog
+        open={Boolean(pendingBarcode)}
+        barcode={pendingBarcode ?? ''}
+        currentQuantity={pendingCurrentQuantity}
+        confirming={confirming}
+        onConfirm={() => void handleConfirmScan()}
+        onCancel={handleCancelScan}
+      />
 
       <ManualEntryModal
         open={manualOpen}
