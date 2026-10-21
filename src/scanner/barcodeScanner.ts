@@ -1,4 +1,9 @@
-import { getBarcodeEngine, type BarcodeEngine, type DetectedCode } from './detectorEngine'
+import {
+  getBarcodeEngines,
+  type BarcodeEngines,
+  type CodeBox,
+  type DetectedCode,
+} from './detectorEngine'
 
 export type ScannerErrorCode =
   | 'permission-denied'
@@ -8,17 +13,49 @@ export type ScannerErrorCode =
   | 'unknown'
 
 const SCAN_COOLDOWN_MS = 700
-const DETECT_INTERVAL_MS = 40
-/** Extra margin around the on-screen box, so slightly off-centre barcodes still read. */
-const ROI_PADDING_RATIO = 0.12
-const ROI_TARGET_WIDTH = 960
-const FULL_FRAME_MAX_WIDTH = 1280
+const DETECT_INTERVAL_MS = 30
+/**
+ * The decoder sees a little beyond the box so the white quiet zone at each end of a barcode
+ * that fills the box is kept; results are then filtered to the box itself.
+ */
+const DECODE_MARGIN_X = 0.08
+const DECODE_MARGIN_Y = 0.25
+/** How far a barcode's ends may poke past the left/right edge of the box. */
+const EDGE_TOLERANCE_X = 0.06
+const DETAIL_TARGET_WIDTH = 960
+const COARSE_TARGET_WIDTH = 480
+const ZOOM_LEVELS = [1, 2]
 /** Formats without a check digit must be read twice in a row before they count. */
 const CONFIRM_WINDOW_MS = 800
 const CHECKSUMMED_FORMATS = new Set(['ean_13', 'ean_8', 'upc_a', 'upc_e'])
 
-type ScanPass = 'roi' | 'roi-contrast' | 'full'
-const PASS_CYCLE: ScanPass[] = ['roi', 'roi-contrast', 'roi', 'full']
+/** Sharpening strength; the blur radius scales with image width so it tracks bar size. */
+const SHARPEN_AMOUNT = 3
+const SHARPEN_RADIUS_DIVISOR = 96
+
+interface ScanPass {
+  engine: 'primary' | 'backup'
+  detail: 'fine' | 'coarse'
+  /** Horizontal sharpening recovers out-of-focus barcodes the decoder otherwise misses. */
+  sharpen: boolean
+}
+
+const WASM_CYCLE: ScanPass[] = [
+  { engine: 'primary', detail: 'fine', sharpen: false },
+  { engine: 'primary', detail: 'fine', sharpen: true },
+  { engine: 'primary', detail: 'fine', sharpen: false },
+  { engine: 'primary', detail: 'fine', sharpen: true },
+  { engine: 'primary', detail: 'coarse', sharpen: false },
+]
+
+const NATIVE_CYCLE: ScanPass[] = [
+  { engine: 'primary', detail: 'fine', sharpen: false },
+  { engine: 'backup', detail: 'fine', sharpen: true },
+  { engine: 'primary', detail: 'fine', sharpen: true },
+  { engine: 'primary', detail: 'fine', sharpen: false },
+  { engine: 'backup', detail: 'fine', sharpen: false },
+  { engine: 'primary', detail: 'fine', sharpen: true },
+]
 
 export function classifyScannerError(error: unknown): ScannerErrorCode {
   const name = error instanceof Error ? error.name : ''
@@ -125,73 +162,102 @@ export interface ScannerController {
   getTorchSupported: () => boolean
   getCameraCount: () => number
   isRunning: () => boolean
+  getZoomSupported: () => boolean
+  /** Steps through the zoom levels and returns the new level. */
+  cycleZoom: () => Promise<number>
 }
 
-interface Rect {
-  x: number
-  y: number
-  width: number
-  height: number
+type Rect = CodeBox
+
+interface FrameRegion {
+  /** Area of the video that is decoded: the box plus a small margin. */
+  crop: Rect
+  /** The on-screen box itself, in video pixels. */
+  frame: Rect
 }
 
 /**
  * Converts the on-screen scan box into video pixel coordinates.
  * The video is rendered with `object-fit: cover`, so part of the frame is cropped off-screen.
  */
-function mapFrameToVideo(
-  video: HTMLVideoElement,
-  frameEl: Element | null,
-): Rect | null {
+function mapFrameToVideo(video: HTMLVideoElement, frameEl: Element | null): FrameRegion | null {
   const vw = video.videoWidth
   const vh = video.videoHeight
   if (!vw || !vh) return null
 
   const viewRect = video.getBoundingClientRect()
-  if (!frameEl || viewRect.width === 0 || viewRect.height === 0) {
-    const width = vw * 0.9
-    const height = vh * 0.4
-    return { x: (vw - width) / 2, y: (vh - height) / 2, width, height }
-  }
+  if (!frameEl || viewRect.width === 0 || viewRect.height === 0) return null
 
   const frameRect = frameEl.getBoundingClientRect()
   const scale = Math.max(viewRect.width / vw, viewRect.height / vh)
   const offsetX = (viewRect.width - vw * scale) / 2
   const offsetY = (viewRect.height - vh * scale) / 2
+  const toVideoX = (px: number) => (px - viewRect.left - offsetX) / scale
+  const toVideoY = (px: number) => (px - viewRect.top - offsetY) / scale
 
-  const padX = frameRect.width * ROI_PADDING_RATIO
-  const padY = frameRect.height * ROI_PADDING_RATIO
-  const left = (frameRect.left - padX - viewRect.left - offsetX) / scale
-  const top = (frameRect.top - padY - viewRect.top - offsetY) / scale
-  const right = (frameRect.right + padX - viewRect.left - offsetX) / scale
-  const bottom = (frameRect.bottom + padY - viewRect.top - offsetY) / scale
+  const frame: Rect = {
+    x: toVideoX(frameRect.left),
+    y: toVideoY(frameRect.top),
+    width: frameRect.width / scale,
+    height: frameRect.height / scale,
+  }
 
-  const x = Math.max(0, Math.floor(left))
-  const y = Math.max(0, Math.floor(top))
-  const width = Math.min(vw, Math.ceil(right)) - x
-  const height = Math.min(vh, Math.ceil(bottom)) - y
+  const padX = frame.width * DECODE_MARGIN_X
+  const padY = frame.height * DECODE_MARGIN_Y
+  const x = Math.max(0, Math.floor(frame.x - padX))
+  const y = Math.max(0, Math.floor(frame.y - padY))
+  const width = Math.min(vw, Math.ceil(frame.x + frame.width + padX)) - x
+  const height = Math.min(vh, Math.ceil(frame.y + frame.height + padY)) - y
   if (width < 16 || height < 16) return null
-  return { x, y, width, height }
+  return { crop: { x, y, width, height }, frame }
 }
 
-/** Stretches luminance to the full 0-255 range: helps faded, glossy or low-light labels. */
-function stretchContrast(image: ImageData): ImageData {
-  const data = image.data
-  let min = 255
-  let max = 0
-  for (let i = 0; i < data.length; i += 4) {
-    const lum = (data[i] * 77 + data[i + 1] * 150 + data[i + 2] * 29) >> 8
-    if (lum < min) min = lum
-    if (lum > max) max = lum
-  }
-  const range = max - min
-  if (range < 24) return image
-  const factor = 255 / range
-  for (let i = 0; i < data.length; i += 4) {
-    const lum = (data[i] * 77 + data[i + 1] * 150 + data[i + 2] * 29) >> 8
-    const value = Math.max(0, Math.min(255, (lum - min) * factor))
-    data[i] = value
-    data[i + 1] = value
-    data[i + 2] = value
+/** True when the barcode's centre is in the box and its ends do not stick far out of it. */
+function isInsideFrame(box: CodeBox | null, frame: Rect): boolean {
+  if (!box) return true
+  const centerX = box.x + box.width / 2
+  const centerY = box.y + box.height / 2
+  if (centerX < frame.x || centerX > frame.x + frame.width) return false
+  if (centerY < frame.y || centerY > frame.y + frame.height) return false
+  const tolerance = frame.width * EDGE_TOLERANCE_X
+  return box.x >= frame.x - tolerance && box.x + box.width <= frame.x + frame.width + tolerance
+}
+
+function distanceFromCenter(box: CodeBox | null, frame: Rect): number {
+  if (!box) return 0
+  const dx = box.x + box.width / 2 - (frame.x + frame.width / 2)
+  const dy = box.y + box.height / 2 - (frame.y + frame.height / 2)
+  return dx * dx + dy * dy
+}
+
+/**
+ * Grayscale unsharp mask along each row (bars are vertical, so only horizontal edges matter).
+ * Uses a running box average, so cost stays linear in pixel count.
+ */
+function sharpenHorizontal(image: ImageData): ImageData {
+  const { width, height, data } = image
+  const radius = Math.max(2, Math.round(width / SHARPEN_RADIUS_DIVISOR))
+  const windowSize = radius * 2 + 1
+  const lum = new Float32Array(width)
+  const at = (x: number) => lum[x < 0 ? 0 : x >= width ? width - 1 : x]
+
+  for (let y = 0; y < height; y++) {
+    const row = y * width * 4
+    for (let x = 0; x < width; x++) {
+      const i = row + x * 4
+      lum[x] = (data[i] * 77 + data[i + 1] * 150 + data[i + 2] * 29) / 256
+    }
+    let sum = 0
+    for (let k = -radius; k <= radius; k++) sum += at(k)
+    for (let x = 0; x < width; x++) {
+      const value = lum[x] + SHARPEN_AMOUNT * (lum[x] - sum / windowSize)
+      const clamped = value < 0 ? 0 : value > 255 ? 255 : value
+      const i = row + x * 4
+      data[i] = clamped
+      data[i + 1] = clamped
+      data[i + 2] = clamped
+      sum += at(x + radius + 1) - at(x - radius)
+    }
   }
   return image
 }
@@ -228,7 +294,10 @@ export function createScannerController(
 
   let stream: MediaStream | null = null
   let videoEl: HTMLVideoElement | null = null
-  let engine: BarcodeEngine | null = null
+  let engines: BarcodeEngines | null = null
+  let passCycle: ScanPass[] = WASM_CYCLE
+  let zoomLevel = 1
+  let zoomMax = 1
   let canvas: HTMLCanvasElement | null = null
   let ctx: CanvasRenderingContext2D | null = null
   let rafId = 0
@@ -265,6 +334,24 @@ export function createScannerController(
     }
   }
 
+  function detectZoomRange() {
+    zoomLevel = 1
+    zoomMax = 1
+    try {
+      const track = getVideoTrack()
+      if (!track) return
+      const caps = track.getCapabilities?.() as
+        | (MediaTrackCapabilities & { zoom?: { min: number; max: number } })
+        | undefined
+      if (!caps?.zoom || caps.zoom.min > 1) return
+      zoomMax = caps.zoom.max
+      const current = (track.getSettings() as MediaTrackSettings & { zoom?: number }).zoom
+      if (typeof current === 'number') zoomLevel = current
+    } catch {
+      zoomMax = 1
+    }
+  }
+
   function detectTorchSupport(): boolean {
     try {
       const caps = getVideoTrack()?.getCapabilities?.() as
@@ -286,46 +373,35 @@ export function createScannerController(
     }
   }
 
-  function drawPass(pass: ScanPass): HTMLCanvasElement | ImageData | null {
+  /** Draws the box region of the current video frame; returns the image and the box within it. */
+  function drawPass(pass: ScanPass): { image: ImageData; frame: Rect } | null {
     if (!videoEl || !canvas || !ctx) return null
-    const vw = videoEl.videoWidth
-    const vh = videoEl.videoHeight
-    if (!vw || !vh) return null
+    const region = mapFrameToVideo(videoEl, document.querySelector(frameSelector))
+    if (!region) return null
+    const { crop, frame } = region
 
-    let source: Rect
-    let targetWidth: number
-    if (pass === 'full') {
-      source = { x: 0, y: 0, width: vw, height: vh }
-      targetWidth = Math.min(vw, FULL_FRAME_MAX_WIDTH)
-    } else {
-      const roi = mapFrameToVideo(videoEl, document.querySelector(frameSelector))
-      if (!roi) return null
-      source = roi
-      const scale = Math.max(0.5, Math.min(2, ROI_TARGET_WIDTH / roi.width))
-      targetWidth = Math.round(roi.width * scale)
+    const target = pass.detail === 'fine' ? DETAIL_TARGET_WIDTH : COARSE_TARGET_WIDTH
+    const scale = Math.max(0.25, Math.min(2, target / crop.width))
+    const width = Math.max(1, Math.round(crop.width * scale))
+    const height = Math.max(1, Math.round(crop.height * scale))
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width
+      canvas.height = height
     }
+    ctx.imageSmoothingEnabled = true
+    ctx.imageSmoothingQuality = scale < 1 ? 'high' : 'low'
+    ctx.drawImage(videoEl, crop.x, crop.y, crop.width, crop.height, 0, 0, width, height)
 
-    const targetHeight = Math.max(1, Math.round((source.height * targetWidth) / source.width))
-    if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
-      canvas.width = targetWidth
-      canvas.height = targetHeight
+    const image = ctx.getImageData(0, 0, width, height)
+    return {
+      image: pass.sharpen ? sharpenHorizontal(image) : image,
+      frame: {
+        x: (frame.x - crop.x) * scale,
+        y: (frame.y - crop.y) * scale,
+        width: frame.width * scale,
+        height: frame.height * scale,
+      },
     }
-    ctx.drawImage(
-      videoEl,
-      source.x,
-      source.y,
-      source.width,
-      source.height,
-      0,
-      0,
-      targetWidth,
-      targetHeight,
-    )
-
-    if (pass === 'roi-contrast') {
-      return stretchContrast(ctx.getImageData(0, 0, targetWidth, targetHeight))
-    }
-    return canvas
   }
 
   async function tick() {
@@ -336,18 +412,22 @@ export function createScannerController(
 
     const now = performance.now()
     if (detecting || now - lastDetectAt < DETECT_INTERVAL_MS) return
-    if (!videoEl || !engine || videoEl.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return
+    if (!videoEl || !engines || videoEl.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return
 
     detecting = true
     lastDetectAt = now
-    const pass = PASS_CYCLE[passIndex % PASS_CYCLE.length]
+    const pass = passCycle[passIndex % passCycle.length]
     passIndex += 1
+    const engine =
+      pass.engine === 'backup' ? (engines.getBackup() ?? engines.primary) : engines.primary
     try {
-      const input = drawPass(pass)
-      if (!input) return
-      const results = await engine.detect(input)
-      const first = results.find((r) => r.rawValue)
-      if (first && running) emit(first)
+      const drawn = drawPass(pass)
+      if (!drawn) return
+      const results = await engine.detect(drawn.image)
+      const best = results
+        .filter((r) => r.rawValue && isInsideFrame(r.box, drawn.frame))
+        .sort((a, b) => distanceFromCenter(a.box, drawn.frame) - distanceFromCenter(b.box, drawn.frame))[0]
+      if (best && running) emit(best)
     } catch (error) {
       console.debug('Barcode detect frame skipped:', error)
     } finally {
@@ -393,6 +473,7 @@ export function createScannerController(
     }
     torchSupported = detectTorchSupport()
     torchOn = false
+    detectZoomRange()
   }
 
   function closeCamera() {
@@ -431,7 +512,7 @@ export function createScannerController(
       const cancelled = () => myGeneration !== generation
 
       // Load the decoder in parallel with the camera permission prompt.
-      const enginePromise = getBarcodeEngine()
+      const enginesPromise = getBarcodeEngines()
 
       canvas = document.createElement('canvas')
       ctx = canvas.getContext('2d', { willReadFrequently: true, alpha: false })
@@ -454,7 +535,8 @@ export function createScannerController(
         }
       }
 
-      engine = await enginePromise
+      engines = await enginesPromise
+      passCycle = engines.primary.kind === 'native' ? NATIVE_CYCLE : WASM_CYCLE
       if (cancelled()) return closeCamera()
       startLoop()
     },
@@ -495,8 +577,27 @@ export function createScannerController(
       startLoop()
     },
 
+    async cycleZoom() {
+      const track = getVideoTrack()
+      if (!track || zoomMax < 1.5) return zoomLevel
+      const levels = ZOOM_LEVELS.filter((level) => level <= zoomMax)
+      const currentIndex = levels.findIndex((level) => Math.abs(level - zoomLevel) < 0.25)
+      const next = levels[(currentIndex + 1) % levels.length]
+      try {
+        await track.applyConstraints({
+          advanced: [{ zoom: next } as MediaTrackConstraintSet],
+        })
+        zoomLevel = next
+      } catch (error) {
+        console.error('Zoom change failed:', error)
+        zoomMax = 1
+      }
+      return zoomLevel
+    },
+
     getTorchSupported: () => torchSupported,
     getCameraCount: () => cameras.length,
     isRunning: () => running,
+    getZoomSupported: () => zoomMax >= 1.5,
   }
 }

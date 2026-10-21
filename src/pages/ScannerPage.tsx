@@ -43,6 +43,8 @@ export function ScannerPage() {
   const [torchOn, setTorchOn] = useState(false)
   const [torchSupported, setTorchSupported] = useState(false)
   const [cameraCount, setCameraCount] = useState(0)
+  const [zoomSupported, setZoomSupported] = useState(false)
+  const [zoomLevel, setZoomLevel] = useState(1)
   const [manualOpen, setManualOpen] = useState(false)
   const [leaveOpen, setLeaveOpen] = useState(false)
   const [pendingBarcode, setPendingBarcode] = useState<string | null>(null)
@@ -200,6 +202,8 @@ export function ScannerPage() {
           if (!cancelled) {
             setTorchSupported(controller.getTorchSupported())
             setCameraCount(controller.getCameraCount())
+            setZoomSupported(controller.getZoomSupported())
+            setZoomLevel(1)
           }
         } catch (err) {
           console.error('Scanner start error:', err)
@@ -251,10 +255,19 @@ export function ScannerPage() {
       await controller.switchCamera()
       setTorchOn(false)
       setTorchSupported(controller.getTorchSupported())
+      setZoomSupported(controller.getZoomSupported())
+      setZoomLevel(1)
     } catch (err) {
       console.error('Switch camera failed:', err)
       setCameraError('Could not switch camera.')
     }
+  }
+
+  async function handleZoom() {
+    const controller = scannerRef.current
+    if (!controller) return
+    setZoomLevel(await controller.cycleZoom())
+    setZoomSupported(controller.getZoomSupported())
   }
 
   async function handleManualSubmit(barcode: string) {
@@ -334,6 +347,16 @@ export function ScannerPage() {
               {torchOn ? 'Flash Off' : 'Flash On'}
             </button>
           ) : null}
+          {zoomSupported ? (
+            <button
+              type="button"
+              className="scanner-chip"
+              onClick={() => void handleZoom()}
+              aria-label={`Camera zoom ${zoomLevel}x, tap to change`}
+            >
+              Zoom {zoomLevel > 1.5 ? '2x' : '1x'}
+            </button>
+          ) : null}
           {cameraCount > 1 ? (
             <button
               type="button"
@@ -353,7 +376,7 @@ export function ScannerPage() {
           <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
             <div className="scan-frame" />
             <p className="mt-6 rounded-full bg-black/55 px-4 py-2 text-sm text-white backdrop-blur">
-              Align the barcode inside the box
+              Fit the whole barcode inside the box
             </p>
           </div>
         ) : null}
