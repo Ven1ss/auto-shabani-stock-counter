@@ -53,6 +53,21 @@ temp = addScan(temp, 'ABC')
 temp = decrementBarcode(temp, 'ABC')
 assert(temp.items.length === 0, 'Zero quantity item was not removed')
 
+// Multi-unit add (box of 24) and undo of the same amount
+let box = addScan(createEmptyStockCount(), 'BOX', 5)
+box = addScan(box, 'BOX', 24)
+assert(box.items[0].quantity === 29, 'Multi-unit add failed')
+box = decrementBarcode(box, 'BOX', 24)
+assert(box.items[0].quantity === 5, 'Multi-unit undo failed')
+box = decrementBarcode(box, 'BOX', 50)
+assert(box.items.length === 0, 'Over-undo should remove the row, never go negative')
+
+// Invalid quantities are ignored
+const unchanged = addScan(createEmptyStockCount(), 'X', 0)
+assert(unchanged.items.length === 0, 'Zero quantity should not add a row')
+assert(addScan(createEmptyStockCount(), 'X', -3).items.length === 0, 'Negative quantity added')
+assert(addScan(createEmptyStockCount(), 'X', 2.7).items[0].quantity === 2, 'Decimal not floored')
+
 // Whitespace normalize
 temp = addScan(createEmptyStockCount(), '  12345  ')
 assert(temp.items[0].barcode === '12345', 'Barcode whitespace not trimmed')

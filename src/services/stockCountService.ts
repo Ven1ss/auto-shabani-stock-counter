@@ -40,8 +40,12 @@ export async function createStockCount(): Promise<StockCount> {
   return count
 }
 
-export async function addScan(count: StockCount, barcode: string): Promise<StockCount> {
-  const updated = addScanLogic(count, barcode)
+export async function addScan(
+  count: StockCount,
+  barcode: string,
+  quantity = 1,
+): Promise<StockCount> {
+  const updated = addScanLogic(count, barcode, quantity)
   await saveToDb(updated)
   return updated
 }
@@ -58,8 +62,9 @@ export async function incrementBarcode(
 export async function decrementBarcode(
   count: StockCount,
   barcode: string,
+  amount = 1,
 ): Promise<StockCount> {
-  const updated = decrementLogic(count, barcode)
+  const updated = decrementLogic(count, barcode, amount)
   await saveToDb(updated)
   return updated
 }

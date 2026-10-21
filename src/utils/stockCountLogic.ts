@@ -32,9 +32,19 @@ export function createEmptyStockCount(): StockCount {
   }
 }
 
-export function addScan(count: StockCount, barcodeInput: string): StockCount {
+/** Whole units only; anything else (0, negatives, decimals, NaN) is rejected. */
+export function normalizeQuantity(quantity: number): number {
+  return Number.isFinite(quantity) ? Math.max(0, Math.floor(quantity)) : 0
+}
+
+export function addScan(
+  count: StockCount,
+  barcodeInput: string,
+  quantity = 1,
+): StockCount {
   const barcode = normalizeBarcode(barcodeInput)
-  if (!barcode) return count
+  const amount = normalizeQuantity(quantity)
+  if (!barcode || amount === 0) return count
 
   const now = new Date().toISOString()
   const existingIndex = count.items.findIndex((item) => item.barcode === barcode)
@@ -45,7 +55,7 @@ export function addScan(count: StockCount, barcodeInput: string): StockCount {
       ...count.items,
       {
         barcode,
-        quantity: 1,
+        quantity: amount,
         firstScannedAt: now,
         lastScannedAt: now,
       },
@@ -55,7 +65,7 @@ export function addScan(count: StockCount, barcodeInput: string): StockCount {
       index === existingIndex
         ? {
             ...item,
-            quantity: item.quantity + 1,
+            quantity: item.quantity + amount,
             lastScannedAt: now,
           }
         : item,
@@ -66,17 +76,25 @@ export function addScan(count: StockCount, barcodeInput: string): StockCount {
 }
 
 export function incrementBarcode(count: StockCount, barcodeInput: string): StockCount {
-  return addScan(count, barcodeInput)
+  return addScan(count, barcodeInput, 1)
 }
 
-export function decrementBarcode(count: StockCount, barcodeInput: string): StockCount {
+/** Removes `amount` units; the row is removed once it reaches 0 (never negative). */
+export function decrementBarcode(
+  count: StockCount,
+  barcodeInput: string,
+  amount = 1,
+): StockCount {
   const barcode = normalizeBarcode(barcodeInput)
+  const units = normalizeQuantity(amount)
+  if (units === 0) return count
+
   const items = count.items
     .map((item) => {
       if (item.barcode !== barcode) return item
       return {
         ...item,
-        quantity: item.quantity - 1,
+        quantity: item.quantity - units,
         lastScannedAt: new Date().toISOString(),
       }
     })

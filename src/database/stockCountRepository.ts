@@ -27,12 +27,13 @@ export async function deleteStockCount(id: string): Promise<void> {
 
 export async function loadPreferences(): Promise<AppPreferences> {
   const db = await getDb()
-  const stored = await db.get('preferences', PREFERENCES_ID)
-  if (!stored) return { ...DEFAULT_PREFERENCES }
-  return {
-    soundEnabled: stored.soundEnabled,
-    vibrationEnabled: stored.vibrationEnabled,
+  const stored: Partial<AppPreferences> | undefined = await db.get('preferences', PREFERENCES_ID)
+  const merged = { ...DEFAULT_PREFERENCES }
+  if (!stored) return merged
+  for (const key of Object.keys(DEFAULT_PREFERENCES) as (keyof AppPreferences)[]) {
+    if (typeof stored[key] === 'boolean') merged[key] = stored[key]
   }
+  return merged
 }
 
 export async function savePreferences(prefs: AppPreferences): Promise<void> {

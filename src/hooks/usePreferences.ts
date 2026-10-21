@@ -45,5 +45,9 @@ export function usePreferences() {
     void save({ ...preferences, vibrationEnabled: !preferences.vibrationEnabled })
   }, [preferences, save])
 
-  return { preferences, ready, toggleSound, toggleVibration }
+  const toggleConfirm = useCallback(() => {
+    void save({ ...preferences, confirmScans: !preferences.confirmScans })
+  }, [preferences, save])
+
+  return { preferences, ready, toggleSound, toggleVibration, toggleConfirm }
 }

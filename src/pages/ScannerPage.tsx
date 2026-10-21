@@ -23,12 +23,20 @@ import { formatNumber } from '../utils/format'
 import { getLastScannedItem, normalizeBarcode } from '../utils/stockCountLogic'
 
 const SCANNER_ELEMENT_ID = 'barcode-reader'
+const UNDO_LIMIT = 20
+/** After the confirm popup closes, the camera is usually still on the same item. */
+const POPUP_SETTLE_MS = 2000
+
+interface UndoEntry {
+  barcode: string
+  amount: number
+}
 
 export function ScannerPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { count, loading, error, replaceCount, getLatest } = useStockCount(id)
-  const { preferences, toggleSound, toggleVibration } = usePreferences()
+  const { preferences, toggleSound, toggleVibration, toggleConfirm } = usePreferences()
 
   const [cameraError, setCameraError] = useState<string | null>(null)
   const [starting, setStarting] = useState(true)
@@ -39,6 +47,7 @@ export function ScannerPage() {
   const [leaveOpen, setLeaveOpen] = useState(false)
   const [pendingBarcode, setPendingBarcode] = useState<string | null>(null)
   const [confirming, setConfirming] = useState(false)
+  const [undoStack, setUndoStack] = useState<UndoEntry[]>([])
   const [feedback, setFeedback] = useState<{
     barcode: string
     quantity: number
@@ -48,6 +57,7 @@ export function ScannerPage() {
   const scannerRef = useRef<ScannerController | null>(null)
   const processingRef = useRef(false)
   const pendingBarcodeRef = useRef<string | null>(null)
+  const closedPopupRef = useRef<{ barcode: string; at: number } | null>(null)
   const feedbackTimerRef = useRef<number | null>(null)
   const preferencesRef = useRef(preferences)
 
@@ -74,17 +84,20 @@ export function ScannerPage() {
   }, [count, pendingBarcode])
 
   const commitScan = useCallback(
-    async (barcode: string) => {
+    async (barcode: string, quantity = 1) => {
       if (processingRef.current) return
       const current = getLatest()
       if (!current || current.status === 'completed') return
 
       processingRef.current = true
       try {
-        const updated = await addScan(current, barcode)
+        const updated = await addScan(current, barcode, quantity)
         replaceCount(updated)
         const item = updated.items.find((i) => i.barcode === normalizeBarcode(barcode))
         if (item) {
+          setUndoStack((prev) =>
+            [...prev, { barcode: item.barcode, amount: quantity }].slice(-UNDO_LIMIT),
+          )
           if (feedbackTimerRef.current) {
             window.clearTimeout(feedbackTimerRef.current)
           }
@@ -112,18 +125,29 @@ export function ScannerPage() {
       const current = getLatest()
       if (!current || current.status === 'completed') return
 
+      if (!preferencesRef.current.confirmScans) {
+        void commitScan(barcode, 1)
+        return
+      }
+
+      const closed = closedPopupRef.current
+      if (closed && closed.barcode === barcode && Date.now() - closed.at < POPUP_SETTLE_MS) {
+        return
+      }
+
       pendingBarcodeRef.current = barcode
       setPendingBarcode(barcode)
       void provideScanFeedback(preferencesRef.current)
     },
-    [getLatest],
+    [commitScan, getLatest],
   )
 
-  async function handleConfirmScan() {
+  async function handleConfirmScan(quantity: number) {
     if (!pendingBarcode || confirming) return
     setConfirming(true)
     try {
-      await commitScan(pendingBarcode)
+      await commitScan(pendingBarcode, quantity)
+      closedPopupRef.current = { barcode: pendingBarcode, at: Date.now() }
       pendingBarcodeRef.current = null
       setPendingBarcode(null)
     } finally {
@@ -131,8 +155,27 @@ export function ScannerPage() {
     }
   }
 
+  async function handleUndo() {
+    const last = undoStack[undoStack.length - 1]
+    const current = getLatest()
+    if (!last || !current || processingRef.current) return
+    processingRef.current = true
+    try {
+      const updated = await decrementBarcode(current, last.barcode, last.amount)
+      replaceCount(updated)
+      setUndoStack((prev) => prev.slice(0, -1))
+    } catch (err) {
+      console.error('Undo failed:', err)
+    } finally {
+      processingRef.current = false
+    }
+  }
+
+  const lastUndo = undoStack[undoStack.length - 1] ?? null
+
   function handleCancelScan() {
     if (confirming) return
+    if (pendingBarcode) closedPopupRef.current = { barcode: pendingBarcode, at: Date.now() }
     pendingBarcodeRef.current = null
     setPendingBarcode(null)
   }
@@ -385,24 +428,45 @@ export function ScannerPage() {
         <div className="mx-auto mt-3 flex max-w-3xl gap-2">
           <button
             type="button"
-            className="btn-secondary flex-1 bg-white text-neutral-900"
+            className="btn-secondary flex-1 whitespace-nowrap bg-white px-2 text-sm text-neutral-900"
             onClick={() => navigate(`/count/${count.id}/review`)}
           >
             View Count
           </button>
           <button
             type="button"
-            className="btn-secondary flex-1 border-white/20 bg-white/10 text-white"
+            className="btn-secondary flex-1 whitespace-nowrap border-white/20 bg-white/10 px-2 text-sm text-white disabled:opacity-40"
+            onClick={() => void handleUndo()}
+            disabled={!lastUndo}
+            aria-label={
+              lastUndo
+                ? `Undo last scan: remove ${lastUndo.amount} of ${lastUndo.barcode}`
+                : 'Undo last scan'
+            }
+          >
+            {lastUndo ? `Undo +${lastUndo.amount}` : 'Undo'}
+          </button>
+          <button
+            type="button"
+            className="btn-secondary flex-1 whitespace-nowrap border-white/20 bg-white/10 px-2 text-sm text-white"
             onClick={() => setManualOpen(true)}
           >
-            Manual Entry
+            Manual
           </button>
         </div>
 
-        <div className="mx-auto mt-3 flex max-w-3xl justify-center gap-4 text-xs text-white/70">
+        <div className="mx-auto mt-2 flex max-w-3xl justify-center gap-1 text-xs text-white/70">
           <button
             type="button"
-            className="underline-offset-2 hover:underline"
+            className="min-h-11 rounded-lg px-3"
+            onClick={toggleConfirm}
+            aria-pressed={preferences.confirmScans}
+          >
+            Confirm {preferences.confirmScans ? 'ON' : 'OFF'}
+          </button>
+          <button
+            type="button"
+            className="min-h-11 rounded-lg px-3"
             onClick={toggleSound}
             aria-pressed={preferences.soundEnabled}
           >
@@ -410,7 +474,7 @@ export function ScannerPage() {
           </button>
           <button
             type="button"
-            className="underline-offset-2 hover:underline"
+            className="min-h-11 rounded-lg px-3"
             onClick={toggleVibration}
             aria-pressed={preferences.vibrationEnabled}
           >
@@ -424,7 +488,7 @@ export function ScannerPage() {
         barcode={pendingBarcode ?? ''}
         currentQuantity={pendingCurrentQuantity}
         confirming={confirming}
-        onConfirm={() => void handleConfirmScan()}
+        onConfirm={(quantity) => void handleConfirmScan(quantity)}
         onCancel={handleCancelScan}
       />
 

@@ -46,9 +46,12 @@ export type SortOption =
 export interface AppPreferences {
   soundEnabled: boolean
   vibrationEnabled: boolean
+  /** Ask the user to confirm each camera scan (and its quantity) before counting it. */
+  confirmScans: boolean
 }
 
 export const DEFAULT_PREFERENCES: AppPreferences = {
   soundEnabled: true,
   vibrationEnabled: true,
+  confirmScans: true,
 }

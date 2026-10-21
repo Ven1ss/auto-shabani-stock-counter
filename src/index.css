@@ -45,6 +45,8 @@ select:focus-visible {
   outline-offset: 2px;
 }
 
+/* Component classes live in a layer so Tailwind utilities on the same element can override them. */
+@layer components {
 .app-shell {
   min-height: 100dvh;
   background: #f5f5f4;
@@ -182,6 +184,7 @@ select:focus-visible {
   border: 2.5px solid rgba(255, 255, 255, 0.98);
   border-radius: 0.85rem;
   box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.45);
+}
 }
 
 #barcode-reader {
