@@ -3,7 +3,6 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { ManualEntryModal } from '../components/ManualEntryModal'
 import { ScanConfirmDialog } from '../components/ScanConfirmDialog'
-import { ScanFeedback } from '../components/ScanFeedback'
 import { usePreferences } from '../hooks/usePreferences'
 import { useStockCount } from '../hooks/useStockCount'
 import {
@@ -54,7 +53,8 @@ export function ScannerPage() {
   const [ready, setReady] = useState(true)
   const [feedback, setFeedback] = useState<{
     barcode: string
-    quantity: number
+    added: number
+    total: number
     visible: boolean
   } | null>(null)
 
@@ -112,10 +112,15 @@ export function ScannerPage() {
           if (feedbackTimerRef.current) {
             window.clearTimeout(feedbackTimerRef.current)
           }
-          setFeedback({ barcode: item.barcode, quantity: item.quantity, visible: true })
+          setFeedback({
+            barcode: item.barcode,
+            added: quantity,
+            total: item.quantity,
+            visible: true,
+          })
           feedbackTimerRef.current = window.setTimeout(() => {
             setFeedback((prev) => (prev ? { ...prev, visible: false } : prev))
-          }, 900)
+          }, 2000)
         }
         void provideScanFeedback(preferencesRef.current)
       } catch (err) {
@@ -196,6 +201,7 @@ export function ScannerPage() {
 
   function handleScanNow() {
     closedPopupRef.current = null
+    setFeedback((prev) => (prev ? { ...prev, visible: false } : prev))
     setScanReady(true)
   }
 
@@ -335,8 +341,8 @@ export function ScannerPage() {
   }
 
   return (
-    <div className="relative flex h-[100dvh] flex-col overflow-hidden bg-neutral-950 text-white">
-      <div className="absolute inset-x-0 top-0 z-20 flex items-start justify-between gap-2 p-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
+    <div className="flex h-[100dvh] flex-col overflow-hidden bg-neutral-950 text-white">
+      <header className="flex shrink-0 items-center justify-between gap-2 border-b border-white/10 px-3 pb-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
         <button
           type="button"
           className="scanner-chip"
@@ -345,24 +351,16 @@ export function ScannerPage() {
         >
           Close
         </button>
-        <div className="rounded-xl bg-black/55 px-3 py-2 text-center backdrop-blur">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-white/70">
-            Stock Count
-          </p>
-          <p className="text-sm font-semibold tabular-nums">
-            {formatNumber(stats.uniqueProducts)} products · {formatNumber(stats.totalUnits)}{' '}
-            units
-          </p>
-        </div>
-        <div className="flex flex-col gap-2">
+        <div className="flex items-center gap-2">
           {torchSupported ? (
             <button
               type="button"
-              className="scanner-chip"
+              className={`scanner-chip ${torchOn ? 'bg-white text-neutral-900' : ''}`}
               onClick={() => void handleTorch()}
               aria-pressed={torchOn}
+              aria-label={torchOn ? 'Turn flash off' : 'Turn flash on'}
             >
-              {torchOn ? 'Flash Off' : 'Flash On'}
+              Flash
             </button>
           ) : null}
           {zoomSupported ? (
@@ -380,50 +378,33 @@ export function ScannerPage() {
               type="button"
               className="scanner-chip"
               onClick={() => void handleSwitchCamera()}
+              aria-label="Switch camera"
             >
-              Switch Cam
+              Switch
             </button>
           ) : null}
         </div>
-      </div>
+      </header>
 
-      <div className="relative min-h-0 flex-1">
+      <div className="relative min-h-0 flex-1 overflow-hidden">
         <div id={SCANNER_ELEMENT_ID} className="h-full w-full [&_video]:object-cover" />
 
-        {!cameraError && ready ? (
-          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-            <div className="relative">
-              <p
-                className="absolute bottom-full left-1/2 mb-3 flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-full bg-emerald-500 px-4 py-1.5 text-sm font-semibold text-white shadow-lg"
-                aria-live="polite"
-              >
-                <span className="size-2 animate-pulse rounded-full bg-white" aria-hidden="true" />
-                Ready to scan
-              </p>
-              <div className="scan-frame border-emerald-400" />
-            </div>
-            <p className="mt-4 rounded-full bg-black/55 px-4 py-2 text-sm text-white backdrop-blur">
-              Fit the whole barcode inside the box
-            </p>
+        {!cameraError ? (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+            <div
+              className={`scan-frame max-h-[80%] ${ready ? 'border-emerald-400' : 'border-white/40'}`}
+            />
           </div>
         ) : null}
 
         {!cameraError && !ready && !pendingBarcode ? (
           <button
             type="button"
-            className="absolute inset-0 z-10 flex flex-col items-center justify-center"
+            className="absolute inset-0 z-10"
             onClick={handleScanNow}
-            aria-label="Scan now: scan the next barcode"
-          >
-            <span className="scan-frame flex items-center justify-center border-white/40">
-              <span className="rounded-2xl bg-white px-10 py-4 text-xl font-bold text-neutral-900 shadow-xl">
-                Scan now
-              </span>
-            </span>
-            <span className="mt-4 rounded-full bg-black/55 px-4 py-2 text-sm text-white backdrop-blur">
-              Point at the next barcode, then tap
-            </span>
-          </button>
+            tabIndex={-1}
+            aria-hidden="true"
+          />
         ) : null}
 
         {starting && !cameraError ? (
@@ -453,18 +434,61 @@ export function ScannerPage() {
             </div>
           </div>
         ) : null}
-
-        {feedback ? (
-          <ScanFeedback
-            barcode={feedback.barcode}
-            quantity={feedback.quantity}
-            visible={feedback.visible}
-          />
-        ) : null}
       </div>
 
-      <div className="z-20 border-t border-white/10 bg-neutral-950/95 px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur">
-        <div className="mx-auto grid max-w-3xl grid-cols-3 gap-2 text-center">
+      {!cameraError ? (
+        <div
+          className="flex h-24 shrink-0 flex-col justify-center gap-2 border-t border-white/10 bg-neutral-900 px-4"
+          aria-live="polite"
+        >
+          {starting ? (
+            <p className="text-center text-sm text-white/70">Starting camera…</p>
+          ) : pendingBarcode ? (
+            <p className="text-center text-sm text-white/70">Check the barcode, then tap Add</p>
+          ) : !ready ? (
+            <div className="mx-auto w-full max-w-md">
+              <p className="truncate text-center text-sm text-white/70">
+                {feedback ? (
+                  <>
+                    <span className="font-semibold text-emerald-400">✓ Added +{feedback.added}</span>
+                    {' · '}
+                    <span className="font-mono">{feedback.barcode}</span>
+                    {` · total ${formatNumber(feedback.total)}`}
+                  </>
+                ) : (
+                  'Point at the next barcode'
+                )}
+              </p>
+              <button
+                type="button"
+                className="mt-2 h-12 w-full rounded-xl bg-white text-lg font-bold text-neutral-900 shadow-lg active:bg-neutral-200"
+                onClick={handleScanNow}
+              >
+                Scan now
+              </button>
+            </div>
+          ) : feedback?.visible ? (
+            <div className="text-center">
+              <p className="text-base font-semibold text-emerald-400">✓ Added +{feedback.added}</p>
+              <p className="mt-1 truncate text-sm text-white/70">
+                <span className="font-mono">{feedback.barcode}</span>
+                {` · total ${formatNumber(feedback.total)}`}
+              </p>
+            </div>
+          ) : (
+            <div className="text-center">
+              <p className="flex items-center justify-center gap-2 text-base font-semibold text-emerald-400">
+                <span className="size-2 animate-pulse rounded-full bg-emerald-400" aria-hidden="true" />
+                Ready to scan
+              </p>
+              <p className="mt-1 text-sm text-white/60">Fit the whole barcode inside the box</p>
+            </div>
+          )}
+        </div>
+      ) : null}
+
+      <div className="shrink-0 border-t border-white/10 bg-neutral-950 px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3">
+        <div className="mx-auto grid max-w-3xl grid-cols-[1fr_1fr_1.6fr] gap-2 text-center">
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-wider text-white/50">
               Unique Products
