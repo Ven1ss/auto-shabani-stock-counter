@@ -24,8 +24,8 @@ import { getLastScannedItem, normalizeBarcode } from '../utils/stockCountLogic'
 
 const SCANNER_ELEMENT_ID = 'barcode-reader'
 const UNDO_LIMIT = 20
-/** After the confirm popup closes, the camera is usually still on the same item. */
-const POPUP_SETTLE_MS = 2000
+/** After Rescan, the camera is usually still on the same item. */
+const RESCAN_SETTLE_MS = 2000
 
 interface UndoEntry {
   barcode: string
@@ -50,6 +50,8 @@ export function ScannerPage() {
   const [pendingBarcode, setPendingBarcode] = useState<string | null>(null)
   const [confirming, setConfirming] = useState(false)
   const [undoStack, setUndoStack] = useState<UndoEntry[]>([])
+  /** After each scan the scanner waits until the user taps "Scan now". */
+  const [ready, setReady] = useState(true)
   const [feedback, setFeedback] = useState<{
     barcode: string
     quantity: number
@@ -60,8 +62,15 @@ export function ScannerPage() {
   const processingRef = useRef(false)
   const pendingBarcodeRef = useRef<string | null>(null)
   const closedPopupRef = useRef<{ barcode: string; at: number } | null>(null)
+  const readyRef = useRef(true)
   const feedbackTimerRef = useRef<number | null>(null)
   const preferencesRef = useRef(preferences)
+
+  const setScanReady = useCallback((next: boolean) => {
+    readyRef.current = next
+    setReady(next)
+    scannerRef.current?.setPaused(!next)
+  }, [])
 
   useEffect(() => {
     preferencesRef.current = preferences
@@ -120,20 +129,22 @@ export function ScannerPage() {
 
   const handleDetectedScan = useCallback(
     (rawBarcode: string) => {
-      if (processingRef.current || pendingBarcodeRef.current) return
+      if (!readyRef.current || processingRef.current || pendingBarcodeRef.current) return
       const barcode = normalizeBarcode(rawBarcode)
       if (!barcode) return
 
       const current = getLatest()
       if (!current || current.status === 'completed') return
 
-      if (!preferencesRef.current.confirmScans) {
-        void commitScan(barcode, 1)
+      const closed = closedPopupRef.current
+      if (closed && closed.barcode === barcode && Date.now() - closed.at < RESCAN_SETTLE_MS) {
         return
       }
 
-      const closed = closedPopupRef.current
-      if (closed && closed.barcode === barcode && Date.now() - closed.at < POPUP_SETTLE_MS) {
+      setScanReady(false)
+
+      if (!preferencesRef.current.confirmScans) {
+        void commitScan(barcode, 1)
         return
       }
 
@@ -141,7 +152,7 @@ export function ScannerPage() {
       setPendingBarcode(barcode)
       void provideScanFeedback(preferencesRef.current)
     },
-    [commitScan, getLatest],
+    [commitScan, getLatest, setScanReady],
   )
 
   async function handleConfirmScan(quantity: number) {
@@ -149,7 +160,7 @@ export function ScannerPage() {
     setConfirming(true)
     try {
       await commitScan(pendingBarcode, quantity)
-      closedPopupRef.current = { barcode: pendingBarcode, at: Date.now() }
+      closedPopupRef.current = null
       pendingBarcodeRef.current = null
       setPendingBarcode(null)
     } finally {
@@ -180,6 +191,12 @@ export function ScannerPage() {
     if (pendingBarcode) closedPopupRef.current = { barcode: pendingBarcode, at: Date.now() }
     pendingBarcodeRef.current = null
     setPendingBarcode(null)
+    setScanReady(true)
+  }
+
+  function handleScanNow() {
+    closedPopupRef.current = null
+    setScanReady(true)
   }
 
   useEffect(() => {
@@ -199,6 +216,7 @@ export function ScannerPage() {
           await controller.start((barcode) => {
             handleDetectedScan(barcode)
           })
+          controller.setPaused(!readyRef.current)
           if (!cancelled) {
             setTorchSupported(controller.getTorchSupported())
             setCameraCount(controller.getCameraCount())
@@ -372,13 +390,40 @@ export function ScannerPage() {
       <div className="relative min-h-0 flex-1">
         <div id={SCANNER_ELEMENT_ID} className="h-full w-full [&_video]:object-cover" />
 
-        {!cameraError ? (
+        {!cameraError && ready ? (
           <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-            <div className="scan-frame" />
-            <p className="mt-6 rounded-full bg-black/55 px-4 py-2 text-sm text-white backdrop-blur">
+            <div className="relative">
+              <p
+                className="absolute bottom-full left-1/2 mb-3 flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-full bg-emerald-500 px-4 py-1.5 text-sm font-semibold text-white shadow-lg"
+                aria-live="polite"
+              >
+                <span className="size-2 animate-pulse rounded-full bg-white" aria-hidden="true" />
+                Ready to scan
+              </p>
+              <div className="scan-frame border-emerald-400" />
+            </div>
+            <p className="mt-4 rounded-full bg-black/55 px-4 py-2 text-sm text-white backdrop-blur">
               Fit the whole barcode inside the box
             </p>
           </div>
+        ) : null}
+
+        {!cameraError && !ready && !pendingBarcode ? (
+          <button
+            type="button"
+            className="absolute inset-0 z-10 flex flex-col items-center justify-center"
+            onClick={handleScanNow}
+            aria-label="Scan now: scan the next barcode"
+          >
+            <span className="scan-frame flex items-center justify-center border-white/40">
+              <span className="rounded-2xl bg-white px-10 py-4 text-xl font-bold text-neutral-900 shadow-xl">
+                Scan now
+              </span>
+            </span>
+            <span className="mt-4 rounded-full bg-black/55 px-4 py-2 text-sm text-white backdrop-blur">
+              Point at the next barcode, then tap
+            </span>
+          </button>
         ) : null}
 
         {starting && !cameraError ? (

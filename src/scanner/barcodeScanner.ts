@@ -165,6 +165,8 @@ export interface ScannerController {
   getZoomSupported: () => boolean
   /** Steps through the zoom levels and returns the new level. */
   cycleZoom: () => Promise<number>
+  /** While paused the camera stays on but no barcodes are decoded. */
+  setPaused: (paused: boolean) => void
 }
 
 type Rect = CodeBox
@@ -301,6 +303,7 @@ export function createScannerController(
   let canvas: HTMLCanvasElement | null = null
   let ctx: CanvasRenderingContext2D | null = null
   let rafId = 0
+  let paused = false
   let detecting = false
   let lastDetectAt = 0
   let passIndex = 0
@@ -411,7 +414,7 @@ export function createScannerController(
     })
 
     const now = performance.now()
-    if (detecting || now - lastDetectAt < DETECT_INTERVAL_MS) return
+    if (paused || detecting || now - lastDetectAt < DETECT_INTERVAL_MS) return
     if (!videoEl || !engines || videoEl.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return
 
     detecting = true
@@ -599,5 +602,15 @@ export function createScannerController(
     getCameraCount: () => cameras.length,
     isRunning: () => running,
     getZoomSupported: () => zoomMax >= 1.5,
+
+    setPaused(next) {
+      if (paused === next) return
+      paused = next
+      // A fresh start lets the same product be scanned again right after resuming.
+      if (!next) {
+        guard.reset()
+        cooldown.reset()
+      }
+    },
   }
 }
