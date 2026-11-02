@@ -5,6 +5,8 @@ export interface StockCountItem {
   quantity: number
   firstScannedAt: string
   lastScannedAt: string
+  /** Free-text description so the product can be identified later (e.g. "Red shampoo 250ml"). */
+  note?: string
 }
 
 /**

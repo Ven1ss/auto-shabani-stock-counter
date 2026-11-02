@@ -42,12 +42,13 @@ export function exportPDF(count: StockCount): void {
   const tableBody = sorted.map((item, index) => [
     String(index + 1),
     item.barcode,
+    item.note ?? '',
     String(item.quantity),
   ])
 
   autoTable(doc, {
     startY: 70,
-    head: [['#', 'Barcode', 'Quantity']],
+    head: [['#', 'Barcode', 'Note', 'Quantity']],
     body: tableBody,
     styles: {
       fontSize: 9,
@@ -62,9 +63,10 @@ export function exportPDF(count: StockCount): void {
       fillColor: [245, 245, 245],
     },
     columnStyles: {
-      0: { cellWidth: 16 },
-      1: { cellWidth: 'auto' },
-      2: { cellWidth: 28, halign: 'right' },
+      0: { cellWidth: 12 },
+      1: { cellWidth: 42 },
+      2: { cellWidth: 'auto' },
+      3: { cellWidth: 24, halign: 'right' },
     },
     margin: { left: 14, right: 14 },
     didDrawPage: (data) => {

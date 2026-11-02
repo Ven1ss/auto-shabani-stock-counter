@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { ManualEntryModal } from '../components/ManualEntryModal'
+import { NoteDialog } from '../components/NoteDialog'
 import { ScanConfirmDialog } from '../components/ScanConfirmDialog'
 import { usePreferences } from '../hooks/usePreferences'
 import { useStockCount } from '../hooks/useStockCount'
@@ -17,6 +18,7 @@ import {
   calculateStatistics,
   decrementBarcode,
   incrementBarcode,
+  setBarcodeNote,
 } from '../services/stockCountService'
 import { formatNumber } from '../utils/format'
 import { getLastScannedItem, normalizeBarcode } from '../utils/stockCountLogic'
@@ -51,6 +53,8 @@ export function ScannerPage() {
   const [undoStack, setUndoStack] = useState<UndoEntry[]>([])
   /** After each scan the scanner waits until the user taps "Scan now". */
   const [ready, setReady] = useState(true)
+  const [noteTarget, setNoteTarget] = useState<string | null>(null)
+  const [savingNote, setSavingNote] = useState(false)
   const [feedback, setFeedback] = useState<{
     barcode: string
     added: number
@@ -89,20 +93,28 @@ export function ScannerPage() {
     [count?.items],
   )
 
-  const pendingCurrentQuantity = useMemo(() => {
-    if (!pendingBarcode || !count) return 0
-    return count.items.find((item) => item.barcode === pendingBarcode)?.quantity ?? 0
-  }, [count, pendingBarcode])
+  const pendingItem = useMemo(
+    () => count?.items.find((item) => item.barcode === pendingBarcode) ?? null,
+    [count, pendingBarcode],
+  )
+  const feedbackNote = useMemo(
+    () => count?.items.find((item) => item.barcode === feedback?.barcode)?.note ?? '',
+    [count, feedback?.barcode],
+  )
+  const noteTargetNote = useMemo(
+    () => count?.items.find((item) => item.barcode === noteTarget)?.note ?? '',
+    [count, noteTarget],
+  )
 
   const commitScan = useCallback(
-    async (barcode: string, quantity = 1) => {
+    async (barcode: string, quantity = 1, note?: string) => {
       if (processingRef.current) return
       const current = getLatest()
       if (!current || current.status === 'completed') return
 
       processingRef.current = true
       try {
-        const updated = await addScan(current, barcode, quantity)
+        const updated = await addScan(current, barcode, quantity, note)
         replaceCount(updated)
         const item = updated.items.find((i) => i.barcode === normalizeBarcode(barcode))
         if (item) {
@@ -160,11 +172,11 @@ export function ScannerPage() {
     [commitScan, getLatest, setScanReady],
   )
 
-  async function handleConfirmScan(quantity: number) {
+  async function handleConfirmScan(quantity: number, note: string) {
     if (!pendingBarcode || confirming) return
     setConfirming(true)
     try {
-      await commitScan(pendingBarcode, quantity)
+      await commitScan(pendingBarcode, quantity, note)
       closedPopupRef.current = null
       pendingBarcodeRef.current = null
       setPendingBarcode(null)
@@ -294,9 +306,23 @@ export function ScannerPage() {
     setZoomSupported(controller.getZoomSupported())
   }
 
-  async function handleManualSubmit(barcode: string) {
+  async function handleManualSubmit(barcode: string, note: string) {
     setManualOpen(false)
-    await commitScan(barcode)
+    await commitScan(barcode, 1, note.trim() ? note : undefined)
+  }
+
+  async function handleSaveNote(note: string) {
+    const current = getLatest()
+    if (!current || !noteTarget || savingNote) return
+    setSavingNote(true)
+    try {
+      replaceCount(await setBarcodeNote(current, noteTarget, note))
+      setNoteTarget(null)
+    } catch (err) {
+      console.error('Saving note failed:', err)
+    } finally {
+      setSavingNote(false)
+    }
   }
 
   async function handleManualIncrement() {
@@ -452,20 +478,35 @@ export function ScannerPage() {
                   <>
                     <span className="font-semibold text-emerald-400">✓ Added +{feedback.added}</span>
                     {' · '}
-                    <span className="font-mono">{feedback.barcode}</span>
+                    {feedbackNote ? (
+                      <span className="text-white">{feedbackNote}</span>
+                    ) : (
+                      <span className="font-mono">{feedback.barcode}</span>
+                    )}
                     {` · total ${formatNumber(feedback.total)}`}
                   </>
                 ) : (
                   'Point at the next barcode'
                 )}
               </p>
-              <button
-                type="button"
-                className="mt-2 h-12 w-full rounded-xl bg-white text-lg font-bold text-neutral-900 shadow-lg active:bg-neutral-200"
-                onClick={handleScanNow}
-              >
-                Scan now
-              </button>
+              <div className="mt-2 flex gap-2">
+                {feedback ? (
+                  <button
+                    type="button"
+                    className="h-12 flex-1 whitespace-nowrap rounded-xl border border-white/20 bg-white/10 px-3 text-sm font-semibold text-white active:bg-white/20"
+                    onClick={() => setNoteTarget(feedback.barcode)}
+                  >
+                    {feedbackNote ? 'Edit note' : 'Add note'}
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="h-12 flex-[2] rounded-xl bg-white text-lg font-bold text-neutral-900 shadow-lg active:bg-neutral-200"
+                  onClick={handleScanNow}
+                >
+                  Scan now
+                </button>
+              </div>
             </div>
           ) : feedback?.visible ? (
             <div className="text-center">
@@ -578,16 +619,26 @@ export function ScannerPage() {
       <ScanConfirmDialog
         open={Boolean(pendingBarcode)}
         barcode={pendingBarcode ?? ''}
-        currentQuantity={pendingCurrentQuantity}
+        currentQuantity={pendingItem?.quantity ?? 0}
+        currentNote={pendingItem?.note ?? ''}
         confirming={confirming}
-        onConfirm={(quantity) => void handleConfirmScan(quantity)}
+        onConfirm={(quantity, note) => void handleConfirmScan(quantity, note)}
         onCancel={handleCancelScan}
+      />
+
+      <NoteDialog
+        open={Boolean(noteTarget)}
+        barcode={noteTarget ?? ''}
+        initialNote={noteTargetNote}
+        saving={savingNote}
+        onSave={(note) => void handleSaveNote(note)}
+        onCancel={() => setNoteTarget(null)}
       />
 
       <ManualEntryModal
         open={manualOpen}
         onClose={() => setManualOpen(false)}
-        onSubmit={(barcode) => void handleManualSubmit(barcode)}
+        onSubmit={(barcode, note) => void handleManualSubmit(barcode, note)}
         lastBarcode={lastItem?.barcode}
         lastQuantity={lastItem?.quantity}
         onIncrement={() => void handleManualIncrement()}

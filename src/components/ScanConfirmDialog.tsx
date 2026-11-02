@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
+import { NOTE_MAX_LENGTH } from '../utils/stockCountLogic'
 
 const MAX_QUANTITY = 9999
 
@@ -11,26 +12,28 @@ interface ScanConfirmDialogProps {
   open: boolean
   barcode: string
   currentQuantity: number
+  currentNote: string
   confirming?: boolean
-  onConfirm: (quantity: number) => void
+  onConfirm: (quantity: number, note: string) => void
   onCancel: () => void
 }
 
-export function ScanConfirmDialog({
-  open,
+export function ScanConfirmDialog({ open, ...props }: ScanConfirmDialogProps) {
+  if (!open) return null
+  // Keyed by barcode so each scan starts with fresh fields taken from the product.
+  return <ScanConfirmContent key={props.barcode} {...props} />
+}
+
+function ScanConfirmContent({
   barcode,
   currentQuantity,
+  currentNote,
   confirming = false,
   onConfirm,
   onCancel,
-}: ScanConfirmDialogProps) {
+}: Omit<ScanConfirmDialogProps, 'open'>) {
   const [quantityText, setQuantityText] = useState('1')
-
-  useEffect(() => {
-    if (open) setQuantityText('1')
-  }, [open, barcode])
-
-  if (!open) return null
+  const [note, setNote] = useState(currentNote)
 
   const quantity = parseQuantity(quantityText)
   const valid = quantity >= 1
@@ -43,12 +46,12 @@ export function ScanConfirmDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      className="fixed inset-0 z-50 flex justify-center overflow-y-auto bg-black/60 p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="scan-confirm-title"
     >
-      <div className="w-full max-w-sm rounded-2xl bg-white p-5 text-neutral-900 shadow-xl">
+      <div className="my-auto w-full max-w-sm rounded-2xl bg-white p-5 text-neutral-900 shadow-xl">
         <h2 id="scan-confirm-title" className="text-center text-lg font-semibold">
           Confirm barcode
         </h2>
@@ -119,6 +122,30 @@ export function ScanConfirmDialog({
           ) : null}
         </div>
 
+        <div className="mt-4">
+          <label
+            htmlFor="scan-confirm-note"
+            className="block text-center text-xs font-semibold uppercase tracking-wide text-neutral-500"
+          >
+            Note (optional)
+          </label>
+          <input
+            id="scan-confirm-note"
+            type="text"
+            value={note}
+            maxLength={NOTE_MAX_LENGTH}
+            enterKeyHint="done"
+            autoComplete="off"
+            onChange={(e) => setNote(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') e.currentTarget.blur()
+            }}
+            placeholder="e.g. Red shampoo 250ml"
+            className="input-field mt-2"
+            disabled={confirming}
+          />
+        </div>
+
         <div className="mt-5 flex gap-3">
           <button
             type="button"
@@ -130,7 +157,7 @@ export function ScanConfirmDialog({
           </button>
           <button
             type="button"
-            onClick={() => valid && onConfirm(quantity)}
+            onClick={() => valid && onConfirm(quantity, note)}
             className="btn-primary flex-1"
             disabled={confirming || !valid}
           >

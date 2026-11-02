@@ -17,6 +17,7 @@ import {
   incrementBarcode as incrementLogic,
   isValidBarcode,
   reopenStockCount as reopenLogic,
+  setBarcodeNote as setNoteLogic,
   setBarcodeQuantity as setQuantityLogic,
 } from '../utils/stockCountLogic'
 
@@ -44,8 +45,19 @@ export async function addScan(
   count: StockCount,
   barcode: string,
   quantity = 1,
+  note?: string,
 ): Promise<StockCount> {
-  const updated = addScanLogic(count, barcode, quantity)
+  const updated = addScanLogic(count, barcode, quantity, note)
+  await saveToDb(updated)
+  return updated
+}
+
+export async function setBarcodeNote(
+  count: StockCount,
+  barcode: string,
+  note: string,
+): Promise<StockCount> {
+  const updated = setNoteLogic(count, barcode, note)
   await saveToDb(updated)
   return updated
 }

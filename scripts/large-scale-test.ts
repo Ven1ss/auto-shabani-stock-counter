@@ -8,6 +8,8 @@ import {
   createEmptyStockCount,
   decrementBarcode,
   filterItemsBySearch,
+  NOTE_MAX_LENGTH,
+  setBarcodeNote,
   sortItems,
 } from '../src/utils/stockCountLogic'
 
@@ -67,6 +69,20 @@ const unchanged = addScan(createEmptyStockCount(), 'X', 0)
 assert(unchanged.items.length === 0, 'Zero quantity should not add a row')
 assert(addScan(createEmptyStockCount(), 'X', -3).items.length === 0, 'Negative quantity added')
 assert(addScan(createEmptyStockCount(), 'X', 2.7).items[0].quantity === 2, 'Decimal not floored')
+
+// Notes: set on add, kept when omitted, replaced, cleared, searchable
+let noted = addScan(createEmptyStockCount(), 'N1', 1, '  Red   shampoo 250ml ')
+assert(noted.items[0].note === 'Red shampoo 250ml', 'Note not normalized on add')
+noted = addScan(noted, 'N1', 2)
+assert(noted.items[0].note === 'Red shampoo 250ml' && noted.items[0].quantity === 3, 'Note lost on re-scan')
+assert(filterItemsBySearch(noted.items, 'shampoo').length === 1, 'Search by note failed')
+noted = setBarcodeNote(noted, 'N1', 'Blue shampoo')
+assert(noted.items[0].note === 'Blue shampoo', 'Note not replaced')
+noted = setBarcodeNote(noted, 'N1', '   ')
+assert(!('note' in noted.items[0]), 'Empty note should remove the field')
+assert(setBarcodeNote(noted, 'MISSING', 'x') === noted, 'Note on missing barcode changed the count')
+noted = addScan(noted, 'N1', 1, 'x'.repeat(500))
+assert(noted.items[0].note?.length === NOTE_MAX_LENGTH, 'Note length not capped')
 
 // Whitespace normalize
 temp = addScan(createEmptyStockCount(), '  12345  ')

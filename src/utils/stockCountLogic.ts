@@ -37,10 +37,30 @@ export function normalizeQuantity(quantity: number): number {
   return Number.isFinite(quantity) ? Math.max(0, Math.floor(quantity)) : 0
 }
 
+export const NOTE_MAX_LENGTH = 200
+
+/** Collapses whitespace and trims; an empty result means "no note". */
+export function normalizeNote(note: string): string {
+  return note.replace(/\s+/g, ' ').trim().slice(0, NOTE_MAX_LENGTH)
+}
+
+function withNote(item: StockCountItem, note: string): StockCountItem {
+  const value = normalizeNote(note)
+  const updated: StockCountItem = { ...item }
+  if (value) updated.note = value
+  else delete updated.note
+  return updated
+}
+
+/**
+ * Adds `quantity` units of a barcode. When `note` is given it replaces the product's note
+ * (an empty string clears it); when omitted the existing note is kept.
+ */
 export function addScan(
   count: StockCount,
   barcodeInput: string,
   quantity = 1,
+  note?: string,
 ): StockCount {
   const barcode = normalizeBarcode(barcodeInput)
   const amount = normalizeQuantity(quantity)
@@ -51,28 +71,35 @@ export function addScan(
 
   let items: StockCountItem[]
   if (existingIndex === -1) {
-    items = [
-      ...count.items,
-      {
-        barcode,
-        quantity: amount,
-        firstScannedAt: now,
-        lastScannedAt: now,
-      },
-    ]
+    const item: StockCountItem = {
+      barcode,
+      quantity: amount,
+      firstScannedAt: now,
+      lastScannedAt: now,
+    }
+    items = [...count.items, note === undefined ? item : withNote(item, note)]
   } else {
-    items = count.items.map((item, index) =>
-      index === existingIndex
-        ? {
-            ...item,
-            quantity: item.quantity + amount,
-            lastScannedAt: now,
-          }
-        : item,
-    )
+    items = count.items.map((item, index) => {
+      if (index !== existingIndex) return item
+      const updated = { ...item, quantity: item.quantity + amount, lastScannedAt: now }
+      return note === undefined ? updated : withNote(updated, note)
+    })
   }
 
   return { ...count, items }
+}
+
+export function setBarcodeNote(
+  count: StockCount,
+  barcodeInput: string,
+  note: string,
+): StockCount {
+  const barcode = normalizeBarcode(barcodeInput)
+  if (!count.items.some((item) => item.barcode === barcode)) return count
+  return {
+    ...count,
+    items: count.items.map((item) => (item.barcode === barcode ? withNote(item, note) : item)),
+  }
 }
 
 export function incrementBarcode(count: StockCount, barcodeInput: string): StockCount {
@@ -171,7 +198,10 @@ export function filterItemsBySearch(
 ): StockCountItem[] {
   const q = query.trim().toLowerCase()
   if (!q) return items
-  return items.filter((item) => item.barcode.toLowerCase().includes(q))
+  return items.filter(
+    (item) =>
+      item.barcode.toLowerCase().includes(q) || Boolean(item.note?.toLowerCase().includes(q)),
+  )
 }
 
 export function sortItems(items: StockCountItem[], sort: SortOption): StockCountItem[] {

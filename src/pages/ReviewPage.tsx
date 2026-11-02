@@ -2,6 +2,7 @@ import { useDeferredValue, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { AppHeader } from '../components/AppHeader'
 import { ConfirmDialog } from '../components/ConfirmDialog'
+import { NoteDialog } from '../components/NoteDialog'
 import { QuantityControls } from '../components/QuantityControls'
 import { useStockCount } from '../hooks/useStockCount'
 import {
@@ -10,6 +11,7 @@ import {
   deleteBarcode,
   finishStockCount,
   incrementBarcode,
+  setBarcodeNote,
 } from '../services/stockCountService'
 import type { SortOption } from '../types'
 import { formatNumber } from '../utils/format'
@@ -26,6 +28,8 @@ export function ReviewPage() {
   const [deleteBarcodeTarget, setDeleteBarcodeTarget] = useState<string | null>(null)
   const [finishOpen, setFinishOpen] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [noteTarget, setNoteTarget] = useState<string | null>(null)
+  const [savingNote, setSavingNote] = useState(false)
 
   const stats = useMemo(
     () => calculateStatistics(count?.items ?? []),
@@ -56,6 +60,19 @@ export function ReviewPage() {
     }
     const updated = await decrementBarcode(count, barcode)
     replaceCount(updated)
+  }
+
+  async function handleSaveNote(note: string) {
+    if (!count || readOnly || !noteTarget || savingNote) return
+    setSavingNote(true)
+    try {
+      replaceCount(await setBarcodeNote(count, noteTarget, note))
+      setNoteTarget(null)
+    } catch (err) {
+      console.error('Saving note failed:', err)
+    } finally {
+      setSavingNote(false)
+    }
   }
 
   async function confirmDeleteItem() {
@@ -118,12 +135,12 @@ export function ReviewPage() {
       <div className="mx-auto w-full max-w-3xl flex-1 px-4 py-4">
         <div className="flex flex-col gap-3 sm:flex-row">
           <label className="block flex-1">
-            <span className="sr-only">Search barcode</span>
+            <span className="sr-only">Search barcode or note</span>
             <input
               type="search"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search barcode..."
+              placeholder="Search barcode or note..."
               className="input-field"
               autoComplete="off"
             />
@@ -149,22 +166,29 @@ export function ReviewPage() {
           </p>
         ) : visibleItems.length === 0 ? (
           <p className="mt-8 text-center text-sm text-neutral-500">
-            No barcodes match your search.
+            No products match your search.
           </p>
         ) : (
           <ul className="mt-4 divide-y divide-neutral-200 overflow-hidden rounded-2xl border border-neutral-200 bg-white">
             {visibleItems.map((item) => (
-              <li key={item.barcode} className="flex items-center gap-3 px-4 py-3">
-                <div className="min-w-0 flex-1">
-                  <p className="break-all font-mono text-sm font-medium text-neutral-900">
-                    {item.barcode}
-                  </p>
-                  <p className="mt-0.5 text-xs text-neutral-500">
-                    Qty {formatNumber(item.quantity)}
-                  </p>
+              <li key={item.barcode} className="px-4 py-3">
+                <div className="flex items-start gap-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="break-all font-mono text-sm font-medium text-neutral-900">
+                      {item.barcode}
+                    </p>
+                    {item.note ? (
+                      <p className="mt-0.5 break-words text-sm text-neutral-700">{item.note}</p>
+                    ) : null}
+                  </div>
+                  {readOnly ? (
+                    <span className="text-base font-semibold tabular-nums text-neutral-900">
+                      {item.quantity}
+                    </span>
+                  ) : null}
                 </div>
                 {!readOnly ? (
-                  <div className="flex items-center gap-2">
+                  <div className="mt-2 flex items-center gap-2">
                     <QuantityControls
                       quantity={item.quantity}
                       onIncrement={() => void handleIncrement(item.barcode)}
@@ -172,17 +196,21 @@ export function ReviewPage() {
                     />
                     <button
                       type="button"
-                      className="min-h-11 rounded-xl px-2 text-xs font-medium text-red-600"
+                      className="min-h-11 rounded-xl px-2 text-xs font-medium text-neutral-700 underline underline-offset-2"
+                      onClick={() => setNoteTarget(item.barcode)}
+                      aria-label={`${item.note ? 'Edit' : 'Add'} note for ${item.barcode}`}
+                    >
+                      {item.note ? 'Edit note' : 'Add note'}
+                    </button>
+                    <button
+                      type="button"
+                      className="ml-auto min-h-11 rounded-xl px-2 text-xs font-medium text-red-600"
                       onClick={() => setDeleteBarcodeTarget(item.barcode)}
                     >
                       Delete
                     </button>
                   </div>
-                ) : (
-                  <span className="text-base font-semibold tabular-nums text-neutral-900">
-                    {item.quantity}
-                  </span>
-                )}
+                ) : null}
               </li>
             ))}
           </ul>
@@ -221,6 +249,15 @@ export function ReviewPage() {
         danger
         onCancel={() => setDeleteBarcodeTarget(null)}
         onConfirm={() => void confirmDeleteItem()}
+      />
+
+      <NoteDialog
+        open={Boolean(noteTarget)}
+        barcode={noteTarget ?? ''}
+        initialNote={count.items.find((item) => item.barcode === noteTarget)?.note ?? ''}
+        saving={savingNote}
+        onSave={(note) => void handleSaveNote(note)}
+        onCancel={() => setNoteTarget(null)}
       />
 
       <ConfirmDialog

@@ -1,38 +1,34 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useState, type FormEvent } from 'react'
+import { NOTE_MAX_LENGTH } from '../utils/stockCountLogic'
 
 interface ManualEntryModalProps {
   open: boolean
   onClose: () => void
-  onSubmit: (barcode: string) => void
+  /** `note` is empty when the user typed none; the product's existing note is then kept. */
+  onSubmit: (barcode: string, note: string) => void
   lastBarcode?: string | null
   lastQuantity?: number
   onIncrement?: () => void
   onDecrement?: () => void
 }
 
-export function ManualEntryModal({
-  open,
+export function ManualEntryModal({ open, ...props }: ManualEntryModalProps) {
+  if (!open) return null
+  // Mounted fresh on every open, so the fields always start empty.
+  return <ManualEntryContent {...props} />
+}
+
+function ManualEntryContent({
   onClose,
   onSubmit,
   lastBarcode,
   lastQuantity,
   onIncrement,
   onDecrement,
-}: ManualEntryModalProps) {
+}: Omit<ManualEntryModalProps, 'open'>) {
   const [barcode, setBarcode] = useState('')
+  const [note, setNote] = useState('')
   const [error, setError] = useState('')
-  const inputRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    if (open) {
-      setBarcode('')
-      setError('')
-      const timer = window.setTimeout(() => inputRef.current?.focus(), 50)
-      return () => window.clearTimeout(timer)
-    }
-  }, [open])
-
-  if (!open) return null
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault()
@@ -41,17 +37,17 @@ export function ManualEntryModal({
       setError('Barcode cannot be empty.')
       return
     }
-    onSubmit(value)
+    onSubmit(value, note)
   }
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-4 sm:items-center"
+      className="fixed inset-0 z-50 flex justify-center overflow-y-auto bg-black/50 p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="manual-entry-title"
     >
-      <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
+      <div className="mt-auto w-full max-w-md rounded-2xl bg-white p-5 shadow-xl sm:my-auto">
         <h2 id="manual-entry-title" className="text-lg font-semibold text-neutral-900">
           Enter Barcode Manually
         </h2>
@@ -62,8 +58,7 @@ export function ManualEntryModal({
               Barcode
             </span>
             <input
-              key={open ? 'open' : 'closed'}
-              ref={inputRef}
+              autoFocus
               type="text"
               inputMode="text"
               autoComplete="off"
@@ -86,6 +81,21 @@ export function ManualEntryModal({
               {error}
             </p>
           ) : null}
+
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-medium text-neutral-700">
+              Note (optional)
+            </span>
+            <input
+              type="text"
+              autoComplete="off"
+              value={note}
+              maxLength={NOTE_MAX_LENGTH}
+              onChange={(e) => setNote(e.target.value)}
+              className="input-field"
+              placeholder="e.g. Red shampoo 250ml"
+            />
+          </label>
 
           <button type="submit" className="btn-primary w-full">
             Add
