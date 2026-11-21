@@ -51,8 +51,8 @@ export function ScannerPage() {
   const [pendingBarcode, setPendingBarcode] = useState<string | null>(null)
   const [confirming, setConfirming] = useState(false)
   const [undoStack, setUndoStack] = useState<UndoEntry[]>([])
-  /** After each scan the scanner waits until the user taps "Scan now". */
-  const [ready, setReady] = useState(true)
+  /** Camera only reads when the user taps Scan. Starts paused. */
+  const [ready, setReady] = useState(false)
   const [noteTarget, setNoteTarget] = useState<string | null>(null)
   const [savingNote, setSavingNote] = useState(false)
   const [feedback, setFeedback] = useState<{
@@ -66,7 +66,7 @@ export function ScannerPage() {
   const processingRef = useRef(false)
   const pendingBarcodeRef = useRef<string | null>(null)
   const closedPopupRef = useRef<{ barcode: string; at: number } | null>(null)
-  const readyRef = useRef(true)
+  const readyRef = useRef(false)
   const feedbackTimerRef = useRef<number | null>(null)
   const preferencesRef = useRef(preferences)
 
@@ -208,10 +208,10 @@ export function ScannerPage() {
     if (pendingBarcode) closedPopupRef.current = { barcode: pendingBarcode, at: Date.now() }
     pendingBarcodeRef.current = null
     setPendingBarcode(null)
-    setScanReady(true)
+    setScanReady(false)
   }
 
-  function handleScanNow() {
+  function handleScan() {
     closedPopupRef.current = null
     setFeedback((prev) => (prev ? { ...prev, visible: false } : prev))
     setScanReady(true)
@@ -306,9 +306,10 @@ export function ScannerPage() {
     setZoomSupported(controller.getZoomSupported())
   }
 
-  async function handleManualSubmit(barcode: string, note: string) {
+  async function handleManualSubmit(barcode: string, quantity: number, note: string) {
     setManualOpen(false)
-    await commitScan(barcode, 1, note.trim() ? note : undefined)
+    setScanReady(false)
+    await commitScan(barcode, quantity, note.trim() ? note : undefined)
   }
 
   async function handleSaveNote(note: string) {
@@ -427,7 +428,7 @@ export function ScannerPage() {
           <button
             type="button"
             className="absolute inset-0 z-10"
-            onClick={handleScanNow}
+            onClick={handleScan}
             tabIndex={-1}
             aria-hidden="true"
           />
@@ -486,7 +487,7 @@ export function ScannerPage() {
                     {` · total ${formatNumber(feedback.total)}`}
                   </>
                 ) : (
-                  'Point at the next barcode'
+                  'Fit the barcode in the box, then tap Scan'
                 )}
               </p>
               <div className="mt-2 flex gap-2">
@@ -502,25 +503,17 @@ export function ScannerPage() {
                 <button
                   type="button"
                   className="h-12 flex-[2] rounded-xl bg-white text-lg font-bold text-neutral-900 shadow-lg active:bg-neutral-200"
-                  onClick={handleScanNow}
+                  onClick={handleScan}
                 >
-                  Scan now
+                  Scan
                 </button>
               </div>
-            </div>
-          ) : feedback?.visible ? (
-            <div className="text-center">
-              <p className="text-base font-semibold text-emerald-400">✓ Added +{feedback.added}</p>
-              <p className="mt-1 truncate text-sm text-white/70">
-                <span className="font-mono">{feedback.barcode}</span>
-                {` · total ${formatNumber(feedback.total)}`}
-              </p>
             </div>
           ) : (
             <div className="text-center">
               <p className="flex items-center justify-center gap-2 text-base font-semibold text-emerald-400">
                 <span className="size-2 animate-pulse rounded-full bg-emerald-400" aria-hidden="true" />
-                Ready to scan
+                Scanning…
               </p>
               <p className="mt-1 text-sm text-white/60">Fit the whole barcode inside the box</p>
             </div>
@@ -638,7 +631,9 @@ export function ScannerPage() {
       <ManualEntryModal
         open={manualOpen}
         onClose={() => setManualOpen(false)}
-        onSubmit={(barcode, note) => void handleManualSubmit(barcode, note)}
+        onSubmit={(barcode, quantity, note) =>
+          void handleManualSubmit(barcode, quantity, note)
+        }
         lastBarcode={lastItem?.barcode}
         lastQuantity={lastItem?.quantity}
         onIncrement={() => void handleManualIncrement()}

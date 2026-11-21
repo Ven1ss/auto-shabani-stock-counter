@@ -1,11 +1,18 @@
 import { useState, type FormEvent } from 'react'
 import { NOTE_MAX_LENGTH } from '../utils/stockCountLogic'
 
+const MAX_QUANTITY = 9999
+
+function parseQuantity(text: string): number {
+  const parsed = Number.parseInt(text, 10)
+  return Number.isFinite(parsed) ? Math.min(MAX_QUANTITY, Math.max(0, parsed)) : 0
+}
+
 interface ManualEntryModalProps {
   open: boolean
   onClose: () => void
   /** `note` is empty when the user typed none; the product's existing note is then kept. */
-  onSubmit: (barcode: string, note: string) => void
+  onSubmit: (barcode: string, quantity: number, note: string) => void
   lastBarcode?: string | null
   lastQuantity?: number
   onIncrement?: () => void
@@ -27,8 +34,18 @@ function ManualEntryContent({
   onDecrement,
 }: Omit<ManualEntryModalProps, 'open'>) {
   const [barcode, setBarcode] = useState('')
+  const [quantityText, setQuantityText] = useState('1')
   const [note, setNote] = useState('')
   const [error, setError] = useState('')
+
+  const quantity = parseQuantity(quantityText)
+  const quantityValid = quantity >= 1
+
+  function step(delta: number) {
+    setQuantityText((prev) =>
+      String(Math.min(MAX_QUANTITY, Math.max(1, parseQuantity(prev) + delta))),
+    )
+  }
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault()
@@ -37,7 +54,11 @@ function ManualEntryContent({
       setError('Barcode cannot be empty.')
       return
     }
-    onSubmit(value, note)
+    if (!quantityValid) {
+      setError('Quantity must be at least 1.')
+      return
+    }
+    onSubmit(value, quantity, note)
   }
 
   return (
@@ -52,7 +73,7 @@ function ManualEntryContent({
           Enter Barcode Manually
         </h2>
 
-        <form onSubmit={handleSubmit} className="mt-4 space-y-3">
+        <form onSubmit={handleSubmit} className="mt-4 space-y-4">
           <label className="block">
             <span className="mb-1.5 block text-sm font-medium text-neutral-700">
               Barcode
@@ -76,11 +97,50 @@ function ManualEntryContent({
               aria-describedby={error ? 'manual-error' : undefined}
             />
           </label>
-          {error ? (
-            <p id="manual-error" className="text-sm text-red-600" role="alert">
-              {error}
-            </p>
-          ) : null}
+
+          <div>
+            <label
+              htmlFor="manual-quantity"
+              className="mb-1.5 block text-sm font-medium text-neutral-700"
+            >
+              How many?
+            </label>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="qty-btn h-14 min-w-14 text-2xl"
+                onClick={() => step(-1)}
+                disabled={quantity <= 1}
+                aria-label="Decrease quantity"
+              >
+                −
+              </button>
+              <input
+                id="manual-quantity"
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                autoComplete="off"
+                value={quantityText}
+                onChange={(e) => {
+                  setQuantityText(e.target.value.replace(/\D/g, '').slice(0, 4))
+                  if (error) setError('')
+                }}
+                onFocus={(e) => e.target.select()}
+                className="input-field h-14 flex-1 text-center text-2xl font-bold tabular-nums"
+                aria-invalid={!quantityValid}
+              />
+              <button
+                type="button"
+                className="qty-btn h-14 min-w-14 text-2xl"
+                onClick={() => step(1)}
+                disabled={quantity >= MAX_QUANTITY}
+                aria-label="Increase quantity"
+              >
+                +
+              </button>
+            </div>
+          </div>
 
           <label className="block">
             <span className="mb-1.5 block text-sm font-medium text-neutral-700">
@@ -97,8 +157,14 @@ function ManualEntryContent({
             />
           </label>
 
-          <button type="submit" className="btn-primary w-full">
-            Add
+          {error ? (
+            <p id="manual-error" className="text-sm text-red-600" role="alert">
+              {error}
+            </p>
+          ) : null}
+
+          <button type="submit" className="btn-primary w-full" disabled={!quantityValid}>
+            {`Add ${quantityValid ? quantity : ''}`.trim()}
           </button>
         </form>
 
