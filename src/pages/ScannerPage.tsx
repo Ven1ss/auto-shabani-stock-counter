@@ -17,7 +17,6 @@ import {
   addScan,
   calculateStatistics,
   decrementBarcode,
-  incrementBarcode,
   setBarcodeNote,
 } from '../services/stockCountService'
 import { formatNumber } from '../utils/format'
@@ -326,22 +325,6 @@ export function ScannerPage() {
     }
   }
 
-  async function handleManualIncrement() {
-    const current = getLatest()
-    const last = getLastScannedItem(current?.items ?? [])
-    if (!current || !last) return
-    const updated = await incrementBarcode(current, last.barcode)
-    replaceCount(updated)
-  }
-
-  async function handleManualDecrement() {
-    const current = getLatest()
-    const last = getLastScannedItem(current?.items ?? [])
-    if (!current || !last) return
-    const updated = await decrementBarcode(current, last.barcode)
-    replaceCount(updated)
-  }
-
   function requestLeave() {
     setLeaveOpen(true)
   }
@@ -634,10 +617,6 @@ export function ScannerPage() {
         onSubmit={(barcode, quantity, note) =>
           void handleManualSubmit(barcode, quantity, note)
         }
-        lastBarcode={lastItem?.barcode}
-        lastQuantity={lastItem?.quantity}
-        onIncrement={() => void handleManualIncrement()}
-        onDecrement={() => void handleManualDecrement()}
       />
 
       <ConfirmDialog

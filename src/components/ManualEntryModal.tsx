@@ -1,22 +1,17 @@
-import { useState, type FormEvent } from 'react'
+import { useState } from 'react'
 import { NOTE_MAX_LENGTH } from '../utils/stockCountLogic'
+import { BarcodeKeyboard } from './BarcodeKeyboard'
 
 const MAX_QUANTITY = 9999
+const MAX_BARCODE_LENGTH = 64
 
-function parseQuantity(text: string): number {
-  const parsed = Number.parseInt(text, 10)
-  return Number.isFinite(parsed) ? Math.min(MAX_QUANTITY, Math.max(0, parsed)) : 0
-}
+type ActiveField = 'barcode' | 'note'
 
 interface ManualEntryModalProps {
   open: boolean
   onClose: () => void
   /** `note` is empty when the user typed none; the product's existing note is then kept. */
   onSubmit: (barcode: string, quantity: number, note: string) => void
-  lastBarcode?: string | null
-  lastQuantity?: number
-  onIncrement?: () => void
-  onDecrement?: () => void
 }
 
 export function ManualEntryModal({ open, ...props }: ManualEntryModalProps) {
@@ -28,34 +23,50 @@ export function ManualEntryModal({ open, ...props }: ManualEntryModalProps) {
 function ManualEntryContent({
   onClose,
   onSubmit,
-  lastBarcode,
-  lastQuantity,
-  onIncrement,
-  onDecrement,
 }: Omit<ManualEntryModalProps, 'open'>) {
   const [barcode, setBarcode] = useState('')
-  const [quantityText, setQuantityText] = useState('1')
+  const [quantity, setQuantity] = useState(1)
   const [note, setNote] = useState('')
+  const [activeField, setActiveField] = useState<ActiveField>('barcode')
   const [error, setError] = useState('')
 
-  const quantity = parseQuantity(quantityText)
-  const quantityValid = quantity >= 1
+  const activeValue = activeField === 'barcode' ? barcode : note
+  const activeMax = activeField === 'barcode' ? MAX_BARCODE_LENGTH : NOTE_MAX_LENGTH
 
-  function step(delta: number) {
-    setQuantityText((prev) =>
-      String(Math.min(MAX_QUANTITY, Math.max(1, parseQuantity(prev) + delta))),
-    )
+  function appendChar(char: string) {
+    if (activeValue.length >= activeMax) return
+    if (activeField === 'barcode') {
+      setBarcode((prev) => (prev + char).slice(0, MAX_BARCODE_LENGTH))
+    } else {
+      setNote((prev) => (prev + char).slice(0, NOTE_MAX_LENGTH))
+    }
+    if (error) setError('')
   }
 
-  function handleSubmit(event: FormEvent) {
-    event.preventDefault()
+  function handleBackspace() {
+    if (activeField === 'barcode') {
+      setBarcode((prev) => prev.slice(0, -1))
+    } else {
+      setNote((prev) => prev.slice(0, -1))
+    }
+    if (error) setError('')
+  }
+
+  function handleClear() {
+    if (activeField === 'barcode') setBarcode('')
+    else setNote('')
+    if (error) setError('')
+  }
+
+  function step(delta: number) {
+    setQuantity((prev) => Math.min(MAX_QUANTITY, Math.max(1, prev + delta)))
+  }
+
+  function handleAdd() {
     const value = barcode.trim()
     if (!value) {
-      setError('Barcode cannot be empty.')
-      return
-    }
-    if (!quantityValid) {
-      setError('Quantity must be at least 1.')
+      setActiveField('barcode')
+      setError('Type the barcode with the keys below.')
       return
     }
     onSubmit(value, quantity, note)
@@ -63,146 +74,105 @@ function ManualEntryContent({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex justify-center overflow-y-auto bg-black/50 p-4"
+      className="fixed inset-0 z-50 flex flex-col bg-white"
       role="dialog"
       aria-modal="true"
       aria-labelledby="manual-entry-title"
     >
-      <div className="mt-auto w-full max-w-md rounded-2xl bg-white p-5 shadow-xl sm:my-auto">
-        <h2 id="manual-entry-title" className="text-lg font-semibold text-neutral-900">
-          Enter Barcode Manually
-        </h2>
-
-        <form onSubmit={handleSubmit} className="mt-4 space-y-4">
-          <label className="block">
-            <span className="mb-1.5 block text-sm font-medium text-neutral-700">
-              Barcode
-            </span>
-            <input
-              autoFocus
-              type="text"
-              inputMode="text"
-              autoComplete="off"
-              autoCapitalize="off"
-              autoCorrect="off"
-              spellCheck={false}
-              value={barcode}
-              onChange={(e) => {
-                setBarcode(e.target.value)
-                if (error) setError('')
-              }}
-              className="input-field font-mono"
-              placeholder="Enter barcode"
-              aria-invalid={Boolean(error)}
-              aria-describedby={error ? 'manual-error' : undefined}
-            />
-          </label>
-
-          <div>
-            <label
-              htmlFor="manual-quantity"
-              className="mb-1.5 block text-sm font-medium text-neutral-700"
-            >
-              How many?
-            </label>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                className="qty-btn h-14 min-w-14 text-2xl"
-                onClick={() => step(-1)}
-                disabled={quantity <= 1}
-                aria-label="Decrease quantity"
-              >
-                −
-              </button>
-              <input
-                id="manual-quantity"
-                type="text"
-                inputMode="numeric"
-                pattern="[0-9]*"
-                autoComplete="off"
-                value={quantityText}
-                onChange={(e) => {
-                  setQuantityText(e.target.value.replace(/\D/g, '').slice(0, 4))
-                  if (error) setError('')
-                }}
-                onFocus={(e) => e.target.select()}
-                className="input-field h-14 flex-1 text-center text-2xl font-bold tabular-nums"
-                aria-invalid={!quantityValid}
-              />
-              <button
-                type="button"
-                className="qty-btn h-14 min-w-14 text-2xl"
-                onClick={() => step(1)}
-                disabled={quantity >= MAX_QUANTITY}
-                aria-label="Increase quantity"
-              >
-                +
-              </button>
-            </div>
-          </div>
-
-          <label className="block">
-            <span className="mb-1.5 block text-sm font-medium text-neutral-700">
-              Note (optional)
-            </span>
-            <input
-              type="text"
-              autoComplete="off"
-              value={note}
-              maxLength={NOTE_MAX_LENGTH}
-              onChange={(e) => setNote(e.target.value)}
-              className="input-field"
-              placeholder="e.g. Red shampoo 250ml"
-            />
-          </label>
-
-          {error ? (
-            <p id="manual-error" className="text-sm text-red-600" role="alert">
-              {error}
-            </p>
-          ) : null}
-
-          <button type="submit" className="btn-primary w-full" disabled={!quantityValid}>
-            {`Add ${quantityValid ? quantity : ''}`.trim()}
-          </button>
-        </form>
-
-        {lastBarcode ? (
-          <div className="mt-5 rounded-xl border border-neutral-200 bg-neutral-50 p-3">
-            <p className="text-xs font-medium uppercase tracking-wide text-neutral-500">
-              Current product
-            </p>
-            <p className="mt-1 break-all font-mono text-sm text-neutral-900">
-              {lastBarcode}
-            </p>
-            <div className="mt-3 flex items-center gap-2">
-              <button
-                type="button"
-                className="btn-secondary min-w-14"
-                onClick={onDecrement}
-                aria-label="Decrease quantity"
-              >
-                −1
-              </button>
-              <span className="flex-1 text-center text-lg font-semibold tabular-nums">
-                {lastQuantity ?? 0}
-              </span>
-              <button
-                type="button"
-                className="btn-secondary min-w-14"
-                onClick={onIncrement}
-                aria-label="Increase quantity"
-              >
-                +1
-              </button>
-            </div>
-          </div>
-        ) : null}
-
-        <button type="button" className="btn-ghost mt-4 w-full" onClick={onClose}>
-          Back to scanner
+      <header className="flex shrink-0 items-center justify-between gap-3 border-b border-neutral-200 px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
+        <button type="button" className="btn-ghost px-2" onClick={onClose}>
+          Back
         </button>
+        <h2 id="manual-entry-title" className="text-base font-semibold text-neutral-900">
+          Type barcode
+        </h2>
+        <span className="w-14" aria-hidden="true" />
+      </header>
+
+      <div className="mx-auto flex w-full max-w-md flex-1 flex-col px-4 pt-4">
+        <button
+          type="button"
+          className={`kbd-field ${activeField === 'barcode' ? 'kbd-field-active' : ''} ${
+            barcode ? '' : 'kbd-field-empty'
+          }`}
+          onClick={() => setActiveField('barcode')}
+          aria-label={barcode ? `Barcode ${barcode}` : 'Barcode, empty'}
+          aria-pressed={activeField === 'barcode'}
+        >
+          {barcode || 'Tap keys below'}
+        </button>
+
+        <div className="mt-4 flex items-center gap-3">
+          <p className="w-16 shrink-0 text-sm font-medium text-neutral-600">Qty</p>
+          <button
+            type="button"
+            className="qty-btn h-12 min-w-12 text-2xl"
+            onClick={() => step(-1)}
+            disabled={quantity <= 1}
+            aria-label="Decrease quantity"
+          >
+            −
+          </button>
+          <p className="flex-1 text-center text-2xl font-bold tabular-nums text-neutral-900">
+            {quantity}
+          </p>
+          <button
+            type="button"
+            className="qty-btn h-12 min-w-12 text-2xl"
+            onClick={() => step(1)}
+            disabled={quantity >= MAX_QUANTITY}
+            aria-label="Increase quantity"
+          >
+            +
+          </button>
+        </div>
+
+        <button
+          type="button"
+          className={`mt-3 min-h-12 rounded-xl border px-3 py-2 text-left text-sm ${
+            activeField === 'note'
+              ? 'border-neutral-900 bg-white text-neutral-900'
+              : 'border-neutral-200 bg-neutral-50 text-neutral-600'
+          }`}
+          onClick={() => setActiveField('note')}
+          aria-pressed={activeField === 'note'}
+        >
+          <span className="block text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
+            Note (optional)
+          </span>
+          <span className={`mt-0.5 block truncate ${note ? 'text-neutral-900' : ''}`}>
+            {note || 'Tap here, then type a short name'}
+          </span>
+        </button>
+
+        {error ? (
+          <p className="mt-3 text-center text-sm text-red-600" role="alert">
+            {error}
+          </p>
+        ) : (
+          <p className="mt-3 text-center text-xs text-neutral-500">
+            {activeField === 'barcode'
+              ? 'Numbers and letters are on the same keyboard'
+              : 'Typing a note — Space is available below'}
+          </p>
+        )}
+
+        <div className="mt-auto pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3">
+          <BarcodeKeyboard
+            onKey={appendChar}
+            onBackspace={handleBackspace}
+            onClear={handleClear}
+            showSpace={activeField === 'note'}
+          />
+
+          <button
+            type="button"
+            className="btn-primary mt-3 w-full text-lg"
+            onClick={handleAdd}
+          >
+            {`Add ${quantity}`}
+          </button>
+        </div>
       </div>
     </div>
   )
