@@ -303,7 +303,8 @@ export function createScannerController(
   let canvas: HTMLCanvasElement | null = null
   let ctx: CanvasRenderingContext2D | null = null
   let rafId = 0
-  let paused = false
+  /** Starts paused — the UI must call setPaused(false) before any barcode is read. */
+  let paused = true
   let detecting = false
   let lastDetectAt = 0
   let passIndex = 0

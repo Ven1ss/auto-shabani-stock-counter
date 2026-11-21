@@ -50,7 +50,7 @@ export function ScannerPage() {
   const [pendingBarcode, setPendingBarcode] = useState<string | null>(null)
   const [confirming, setConfirming] = useState(false)
   const [undoStack, setUndoStack] = useState<UndoEntry[]>([])
-  /** Camera only reads when the user taps Scan. Starts paused. */
+  /** Camera only reads after the user taps Scan now — including the first scan. */
   const [ready, setReady] = useState(false)
   const [noteTarget, setNoteTarget] = useState<string | null>(null)
   const [savingNote, setSavingNote] = useState(false)
@@ -210,7 +210,7 @@ export function ScannerPage() {
     setScanReady(false)
   }
 
-  function handleScan() {
+  function handleScanNow() {
     closedPopupRef.current = null
     setFeedback((prev) => (prev ? { ...prev, visible: false } : prev))
     setScanReady(true)
@@ -411,7 +411,7 @@ export function ScannerPage() {
           <button
             type="button"
             className="absolute inset-0 z-10"
-            onClick={handleScan}
+            onClick={handleScanNow}
             tabIndex={-1}
             aria-hidden="true"
           />
@@ -470,7 +470,7 @@ export function ScannerPage() {
                     {` · total ${formatNumber(feedback.total)}`}
                   </>
                 ) : (
-                  'Fit the barcode in the box, then tap Scan'
+                  'Point at the barcode, then tap Scan now'
                 )}
               </p>
               <div className="mt-2 flex gap-2">
@@ -486,9 +486,9 @@ export function ScannerPage() {
                 <button
                   type="button"
                   className="h-12 flex-[2] rounded-xl bg-white text-lg font-bold text-neutral-900 shadow-lg active:bg-neutral-200"
-                  onClick={handleScan}
+                  onClick={handleScanNow}
                 >
-                  Scan
+                  Scan now
                 </button>
               </div>
             </div>
