@@ -27,6 +27,7 @@ function ManualEntryContent({
   const [barcode, setBarcode] = useState('')
   const [quantity, setQuantity] = useState(1)
   const [note, setNote] = useState('')
+  const [showNote, setShowNote] = useState(false)
   const [activeField, setActiveField] = useState<ActiveField>('barcode')
   const [error, setError] = useState('')
 
@@ -35,7 +36,9 @@ function ManualEntryContent({
 
   function appendChar(char: string) {
     if (activeValue.length >= activeMax) return
+    // Barcodes never need spaces — ignore them so notes Space is safe if mistapped.
     if (activeField === 'barcode') {
+      if (char === ' ') return
       setBarcode((prev) => (prev + char).slice(0, MAX_BARCODE_LENGTH))
     } else {
       setNote((prev) => (prev + char).slice(0, NOTE_MAX_LENGTH))
@@ -44,11 +47,8 @@ function ManualEntryContent({
   }
 
   function handleBackspace() {
-    if (activeField === 'barcode') {
-      setBarcode((prev) => prev.slice(0, -1))
-    } else {
-      setNote((prev) => prev.slice(0, -1))
-    }
+    if (activeField === 'barcode') setBarcode((prev) => prev.slice(0, -1))
+    else setNote((prev) => prev.slice(0, -1))
     if (error) setError('')
   }
 
@@ -60,6 +60,11 @@ function ManualEntryContent({
 
   function step(delta: number) {
     setQuantity((prev) => Math.min(MAX_QUANTITY, Math.max(1, prev + delta)))
+  }
+
+  function openNote() {
+    setShowNote(true)
+    setActiveField('note')
   }
 
   function handleAdd() {
@@ -79,7 +84,7 @@ function ManualEntryContent({
       aria-modal="true"
       aria-labelledby="manual-entry-title"
     >
-      <header className="flex shrink-0 items-center justify-between gap-3 border-b border-neutral-200 px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
+      <header className="flex shrink-0 items-center justify-between gap-3 border-b border-neutral-200 px-4 pb-2.5 pt-[max(0.5rem,env(safe-area-inset-top))]">
         <button type="button" className="btn-ghost px-2" onClick={onClose}>
           Back
         </button>
@@ -89,36 +94,36 @@ function ManualEntryContent({
         <span className="w-14" aria-hidden="true" />
       </header>
 
-      <div className="mx-auto flex w-full max-w-md flex-1 flex-col px-4 pt-4">
+      <div className="mx-auto flex min-h-0 w-full max-w-md flex-1 flex-col px-3 pt-3">
         <button
           type="button"
-          className={`kbd-field ${activeField === 'barcode' ? 'kbd-field-active' : ''} ${
+          className={`kbd-field shrink-0 ${activeField === 'barcode' ? 'kbd-field-active' : ''} ${
             barcode ? '' : 'kbd-field-empty'
           }`}
           onClick={() => setActiveField('barcode')}
           aria-label={barcode ? `Barcode ${barcode}` : 'Barcode, empty'}
           aria-pressed={activeField === 'barcode'}
         >
-          {barcode || 'Tap keys below'}
+          {barcode || 'Barcode'}
         </button>
 
-        <div className="mt-4 flex items-center gap-3">
-          <p className="w-16 shrink-0 text-sm font-medium text-neutral-600">Qty</p>
+        <div className="mt-2.5 flex shrink-0 items-center gap-3">
+          <p className="w-12 shrink-0 text-sm font-medium text-neutral-600">Qty</p>
           <button
             type="button"
-            className="qty-btn h-12 min-w-12 text-2xl"
+            className="qty-btn h-11 min-w-11 text-xl"
             onClick={() => step(-1)}
             disabled={quantity <= 1}
             aria-label="Decrease quantity"
           >
             −
           </button>
-          <p className="flex-1 text-center text-2xl font-bold tabular-nums text-neutral-900">
+          <p className="flex-1 text-center text-xl font-bold tabular-nums text-neutral-900">
             {quantity}
           </p>
           <button
             type="button"
-            className="qty-btn h-12 min-w-12 text-2xl"
+            className="qty-btn h-11 min-w-11 text-xl"
             onClick={() => step(1)}
             disabled={quantity >= MAX_QUANTITY}
             aria-label="Increase quantity"
@@ -127,49 +132,50 @@ function ManualEntryContent({
           </button>
         </div>
 
-        <button
-          type="button"
-          className={`mt-3 min-h-12 rounded-xl border px-3 py-2 text-left text-sm ${
-            activeField === 'note'
-              ? 'border-neutral-900 bg-white text-neutral-900'
-              : 'border-neutral-200 bg-neutral-50 text-neutral-600'
-          }`}
-          onClick={() => setActiveField('note')}
-          aria-pressed={activeField === 'note'}
-        >
-          <span className="block text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
-            Note (optional)
-          </span>
-          <span className={`mt-0.5 block truncate ${note ? 'text-neutral-900' : ''}`}>
-            {note || 'Tap here, then type a short name'}
-          </span>
-        </button>
-
-        {error ? (
-          <p className="mt-3 text-center text-sm text-red-600" role="alert">
-            {error}
-          </p>
+        {showNote ? (
+          <button
+            type="button"
+            className={`mt-2 min-h-11 shrink-0 rounded-xl border px-3 py-1.5 text-left text-sm ${
+              activeField === 'note'
+                ? 'border-neutral-900 bg-white text-neutral-900'
+                : 'border-neutral-200 bg-neutral-50 text-neutral-600'
+            }`}
+            onClick={() => setActiveField('note')}
+            aria-pressed={activeField === 'note'}
+          >
+            <span className="block text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
+              Note
+            </span>
+            <span className={`mt-0.5 block truncate ${note ? 'text-neutral-900' : ''}`}>
+              {note || 'Product name'}
+            </span>
+          </button>
         ) : (
-          <p className="mt-3 text-center text-xs text-neutral-500">
-            {activeField === 'barcode'
-              ? 'Numbers and letters are on the same keyboard'
-              : 'Typing a note — Space is available below'}
-          </p>
+          <button
+            type="button"
+            className="btn-ghost mt-1 shrink-0 self-start px-1 text-sm text-neutral-500"
+            onClick={openNote}
+          >
+            + Add note
+          </button>
         )}
 
-        <div className="mt-auto pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3">
+        {error ? (
+          <p className="mt-1 shrink-0 text-center text-sm text-red-600" role="alert">
+            {error}
+          </p>
+        ) : null}
+
+        <div className="mt-2 min-h-0 flex-1 overflow-y-auto">
           <BarcodeKeyboard
             onKey={appendChar}
             onBackspace={handleBackspace}
             onClear={handleClear}
-            showSpace={activeField === 'note'}
           />
+        </div>
 
-          <button
-            type="button"
-            className="btn-primary mt-3 w-full text-lg"
-            onClick={handleAdd}
-          >
+        <div className="shrink-0 border-t border-neutral-100 bg-white pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+          <button type="button" className="btn-primary w-full text-lg" onClick={handleAdd}>
             {`Add ${quantity}`}
           </button>
         </div>
